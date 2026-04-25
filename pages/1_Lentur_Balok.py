@@ -897,7 +897,6 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
     """Susun langkah perhitungan torsi b19 s/d b28."""
 
     if T["abaikan_torsi"]:
-        # Semua langkah dengan status diabaikan
         s_abaikan = dict(
             no="b19-b28.", ref="SNI 2847:2019 Pasal 22.7.4",
             judul="EVALUASI TORSI -- DILEWATI",
@@ -910,6 +909,19 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             ok=True,
         )
         return [s_abaikan]
+
+    # Pre-compute strings yang butuh conditional agar tidak ada nested f-string
+    _ok_dim    = "[OK] Dimensi penampang mencukupi" if T["ok_dimensi"] else "[TIDAK OK] Penampang harus diperbesar!"
+    _ok_seng   = "[OK]" if T["ok_sengkang_gabungan"] else ("[TIDAK OK] Perlu s <= " + str(round(T["s_perlu_gabungan"])) + " mm")
+    _ok_avt    = "[OK]" if T["ok_Avt_min"] else "[TIDAK OK]"
+    _ok_spasi  = "[OK]" if T["ok_spasi_torsi"] else "[TIDAK OK]"
+    _ok_dc_t   = "AMAN  --  Phi.Tn >= Tu_desain" if T["ok_DC_torsi"] else "TIDAK AMAN  --  Phi.Tn < Tu_desain (perkecil spasi / tambah sengkang)"
+    _ok_dim_r  = "[OK]" if T["ok_dimensi"] else "[TIDAK OK]"
+    _ok_seng_r = "[OK]" if T["ok_sengkang_gabungan"] else "[TIDAK OK]"
+    _ok_avt_r  = "[OK]" if T["ok_Avt_min"] else "[TIDAK OK]"
+    _ok_spasi_r= "[OK]" if T["ok_spasi_torsi"] else "[TIDAK OK]"
+    _ok_dc_r   = "[OK]" if T["ok_DC_torsi"] else "[TIDAK OK]"
+    _abaik_str = "[DIABAIKAN]" if T["abaikan_torsi"] else "[HITUNG TORSI] Tu > Phi_t x Tth"
 
     # -- b19: Properti penampang --
     s19 = dict(
@@ -956,7 +968,7 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             f"Phi_t x Tth = {T['Phi_t']:.2f} x {T['Tth']:.4f} = {T['phi_Tth']:.4f} kN.m\n\n"
             f"Tu = {Tu:.3f} kN.m\n"
             f"Kontrol Tu ({Tu:.3f}) vs Phi_t x Tth ({T['phi_Tth']:.4f})\n"
-            f"  -->  {'[DIABAIKAN]' if T['abaikan_torsi'] else '[HITUNG TORSI] Tu > Phi_t x Tth'}"
+            f"  -->  {_abaik_str}"
         ),
         ok=True,
     )
@@ -979,7 +991,6 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
     )
 
     # -- b23: Cek dimensi penampang --
-    ok_dim = T["ok_dimensi"]
     s23 = dict(
         no="b23.", ref="SNI 2847:2019 Pasal 22.7.7.1",
         judul="Cek dimensi penampang (kombinasi geser + torsi)",
@@ -993,12 +1004,12 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             f"LHS = sqrt( {T['term_geser']:.4f}^2 + {T['term_torsi']:.4f}^2 )\n"
             f"    = {T['lhs_dim']:.4f} MPa\n\n"
             f"RHS = Phi_v x (Vc/(b*d) + 0.66 sqrt(fc))\n"
-            f"    = {T['Vu']*0+0.75:.2f} x ({T['Vc']*1000:.0f}/({b:.0f}x{d_aktual:.2f}) + 0.66x{math.sqrt(fc):.4f})\n"
+            f"    = 0.75 x ({T['Vc']*1000:.0f}/({b:.0f}x{d_aktual:.2f}) + 0.66x{math.sqrt(fc):.4f})\n"
             f"    = {T['rhs_dim']:.4f} MPa\n\n"
             f"D/C dimensi = {T['DC_dim']:.3f}\n"
-            f"  -->  {'[OK] Dimensi penampang mencukupi' if ok_dim else '[TIDAK OK] Penampang harus diperbesar!'}"
+            f"  -->  {_ok_dim}"
         ),
-        ok=ok_dim,
+        ok=T["ok_dimensi"],
     )
 
     # -- b24: At/s untuk torsi --
@@ -1025,20 +1036,19 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             f"                      = {T['Av_per_s_pasang']:.4f} mm2/mm\n\n"
             f"At/s perlu (torsi)    = {T['At_per_s']:.6f} mm2/mm\n"
             f"2 x At/s              = {2*T['At_per_s']:.6f} mm2/mm\n\n"
-            f"(Av + 2At)/s perlu    = {T['Av_per_s_pasang']:.4f} + "
-            f"{2*T['At_per_s']:.6f}\n"
+            f"(Av + 2At)/s perlu    = {T['Av_per_s_pasang']:.4f} + {2*T['At_per_s']:.6f}\n"
             f"                      = {T['Avt_per_s_perlu']:.6f} mm2/mm\n\n"
             f"(Av + 2At) perlu pada s = {s_seng:.0f} mm\n"
             f"  = {T['Avt_per_s_perlu']:.6f} x {s_seng:.0f} = {T['Avt_perlu_abs']:.2f} mm2\n\n"
             f"Av_pasang (ada)       = {T['Avt_pasang']:.2f} mm2\n"
-            f"  -->  {'[OK]' if T['ok_sengkang_gabungan'] else f'[TIDAK OK] Perlu s <= {T[\"s_perlu_gabungan\"]:.0f} mm'}\n\n"
+            f"  -->  {_ok_seng}\n\n"
             f"-- Av+2At minimum (SNI 9.6.4.2) --\n"
             f"(Av+2At)_min/s = max(0.062 sqrt(fc) b/fyt , 0.35 b/fyt)\n"
             f"               = max({T['AvtS_minA']:.4f} , {T['AvtS_minB']:.4f}) "
             f"= {T['AvtS_min']:.4f} mm2/mm\n"
             f"(Av+2At)_min   = {T['AvtS_min']:.4f} x {s_seng:.0f} = {T['Avt_min']:.2f} mm2\n"
             f"Kontrol Av_pasang ({T['Avt_pasang']:.2f}) >= (Av+2At)_min ({T['Avt_min']:.2f})  "
-            f"-->  {'[OK]' if T['ok_Avt_min'] else '[TIDAK OK]'}"
+            f"-->  {_ok_avt}"
         ),
         ok=(T["ok_sengkang_gabungan"] and T["ok_Avt_min"]),
     )
@@ -1054,7 +1064,7 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             f"            = {T['s_max_torsi']:.1f} mm\n\n"
             f"s_pasang = {s_seng:.0f} mm\n"
             f"Kontrol s_pasang ({s_seng:.0f}) <= s_max_torsi ({T['s_max_torsi']:.1f})  "
-            f"-->  {'[OK]' if T['ok_spasi_torsi'] else '[TIDAK OK]'}"
+            f"-->  {_ok_spasi}"
         ),
         ok=T["ok_spasi_torsi"],
     )
@@ -1090,11 +1100,6 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
     )
 
     # -- b28: DC Torsi & Kesimpulan --
-    if T["ok_DC_torsi"]:
-        ket_dc_t = "AMAN  --  Phi.Tn >= Tu_desain"
-    else:
-        ket_dc_t = "TIDAK AMAN  --  Phi.Tn < Tu_desain (perkecil spasi / tambah sengkang)"
-
     s28 = dict(
         no="b28.", ref="SNI 2847:2019 Pasal 9.5.1.2",
         judul="D/C Ratio (Demand-to-Capacity) - TORSI & Kesimpulan",
@@ -1109,18 +1114,20 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
             f"D/C = Tu_desain / Phi.Tn\n"
             f"    = {T['Tu_desain']:.4f} / {T['PhiTn_cap']:.4f}\n"
             f"    = {T['DC_torsi']:.3f}\n\n"
-            f"{ket_dc_t}\n\n"
+            f"{_ok_dc_t}\n\n"
             f"-- Rangkuman kontrol torsi --\n"
-            f"Dimensi penampang    : {'[OK]' if T['ok_dimensi'] else '[TIDAK OK]'}\n"
-            f"Sengkang gabungan    : {'[OK]' if T['ok_sengkang_gabungan'] else '[TIDAK OK]'}\n"
-            f"(Av+2At) minimum     : {'[OK]' if T['ok_Avt_min'] else '[TIDAK OK]'}\n"
-            f"Spasi max torsi      : {'[OK]' if T['ok_spasi_torsi'] else '[TIDAK OK]'}\n"
-            f"D/C torsi <= 1.0     : {'[OK]' if T['ok_DC_torsi'] else '[TIDAK OK]'}"
+            f"Dimensi penampang    : {_ok_dim_r}\n"
+            f"Sengkang gabungan    : {_ok_seng_r}\n"
+            f"(Av+2At) minimum     : {_ok_avt_r}\n"
+            f"Spasi max torsi      : {_ok_spasi_r}\n"
+            f"D/C torsi <= 1.0     : {_ok_dc_r}"
         ),
         ok=T["ok_torsi_total"],
     )
 
     return [s19, s20, s21, s22, s23, s24, s25, s26, s27, s28]
+
+
 
 
 # ============================================================
