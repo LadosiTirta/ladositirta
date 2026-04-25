@@ -1,6 +1,6 @@
 """
 =============================================================
-HALAMAN 1 - EVALUASI KAPASITAS LENTUR & GESER BALOK BETON BERTULANG
+HALAMAN 1 - EVALUASI KAPASITAS LENTUR, GESER & TORSI BALOK BETON BERTULANG
                 (Tulangan Rangkap - Strain Compatibility)
 Referensi : SNI 2847:2019 (ACI 318-14)
 Framework : Streamlit (multipage)
@@ -10,7 +10,7 @@ Session   : st.session_state untuk persistensi hasil
 TAHAP PENGEMBANGAN:
   [v] TAHAP 0 : Lentur Tulangan Rangkap (b1 - b10)
   [v] TAHAP 1 : Geser SNI 2847:2019      (b11 - b18)  +  Timestamp
-  [ ] TAHAP 2 : Torsi SNI 2847:2019      (b19 - b25)  -- placeholder
+  [v] TAHAP 2 : Torsi SNI 2847:2019      (b19 - b28)
 =============================================================
 """
 
@@ -30,7 +30,7 @@ from fpdf import FPDF
 # KONFIGURASI HALAMAN
 # ============================================================
 st.set_page_config(
-    page_title="Evaluasi Lentur & Geser Balok | SNI 2847:2019",
+    page_title="Evaluasi Lentur, Geser & Torsi Balok | SNI 2847:2019",
     page_icon="🏗",
     layout="wide",
 )
@@ -100,10 +100,6 @@ def luas_batang(d_mm: float) -> float:
 # FUNGSI HITUNG GEOMETRI TULANGAN OTOMATIS
 # ============================================================
 def hitung_lapis_tarik(h, cc, ds, n1, db1, n2, db2, spasi=25.0):
-    """
-    Hitung posisi tiap lapis tarik (dari serat tekan teratas).
-    Lapis 1 = paling bawah, Lapis 2 = di atas Lapis 1.
-    """
     lapis = []
     if n1 > 0 and db1 > 0:
         y1 = h - cc - ds - db1 / 2.0
@@ -127,10 +123,6 @@ def hitung_lapis_tarik(h, cc, ds, n1, db1, n2, db2, spasi=25.0):
 
 
 def hitung_lapis_tekan(cc, ds, n1, db1, n2, db2, spasi=25.0):
-    """
-    Hitung posisi tiap lapis tekan (dari serat tekan teratas).
-    Lapis 1 = paling atas (paling dekat serat tekan).
-    """
     lapis = []
     if n1 > 0 and db1 > 0:
         y1 = cc + ds + db1 / 2.0
@@ -169,10 +161,6 @@ def hitung_beta1(fc):
 
 
 def gaya_dalam(c, fc, fy, b, beta1, lapis_tarik, lapis_tekan):
-    """
-    Hitung gaya dalam berdasarkan asumsi nilai c (sumbu netral).
-    Strain compatibility: regangan beton ekstrim = 0.003.
-    """
     Es      = 200_000.0
     eps_cu  = 0.003
     eps_y   = fy / Es
@@ -257,7 +245,6 @@ def evaluasi_balok(fc, fy, b, h, cc_sel, ds, lapis_tarik, lapis_tekan,
     info_tr = G["info_tarik"]
     eps_y   = G["eps_y"]
 
-    # Mn dengan referensi titik berat tulangan tarik:
     Mn_Nmm = Cc * (d_tarik - a / 2)
     for L in info_tk:
         Mn_Nmm += L["F"] * (d_tarik - L["y"])
@@ -311,39 +298,16 @@ def evaluasi_balok(fc, fy, b, h, cc_sel, ds, lapis_tarik, lapis_tekan,
 # FUNGSI EVALUASI GESER (SNI 2847:2019)  -- TAHAP 1
 # ============================================================
 def hitung_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, lambda_=1.0):
-    """
-    Evaluasi geser balok beton bertulang sesuai SNI 2847:2019.
-
-    Parameter
-    ---------
-    fc        : kuat tekan beton (MPa)
-    fyt       : kuat leleh tulangan transversal/sengkang (MPa)
-    b         : lebar penampang (mm)
-    d_aktual  : tinggi efektif tulangan tarik (mm)
-    Vu        : gaya geser ultimit (kN)
-    ds        : diameter sengkang (mm)
-    s_seng    : jarak antar sengkang terpasang (mm)
-    n_kaki    : jumlah kaki sengkang per spasi
-    lambda_   : faktor beton ringan (1.0 untuk beton normal)
-
-    Returns
-    -------
-    dict berisi seluruh besaran hasil evaluasi geser.
-    """
     G = {}
 
-    # ---- (a) Faktor reduksi geser ----
-    Phi_v = 0.75   # SNI 2847:2019 Pasal 21.2.1
+    Phi_v = 0.75
+    Vc_N  = 0.17 * lambda_ * math.sqrt(fc) * b * d_aktual
+    Vc    = Vc_N / 1000.0
 
-    # ---- (b) Kapasitas geser beton (Vc) -- SNI 22.5.5.1 ----
-    Vc_N  = 0.17 * lambda_ * math.sqrt(fc) * b * d_aktual   # Newton
-    Vc    = Vc_N / 1000.0                                   # kN
-
-    # ---- (c) Klasifikasi kebutuhan sengkang ----
     half_phiVc = 0.5 * Phi_v * Vc
     phiVc      = Phi_v * Vc
     if Vu <= half_phiVc:
-        klas_seng = "tidak_perlu"   # tetap pasang sengkang minimum praktis
+        klas_seng = "tidak_perlu"
         ket_klas  = (f"Vu = {Vu:.2f} kN <= 0.5 Phi.Vc = {half_phiVc:.2f} kN  "
                      f"-->  secara teori tidak perlu sengkang, "
                      f"tetap pasang sengkang minimum.")
@@ -356,18 +320,13 @@ def hitung_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, lambda_=1.0):
         ket_klas  = (f"Vu = {Vu:.2f} kN > Phi.Vc = {phiVc:.2f} kN  "
                      f"-->  perlu menghitung tulangan geser (Vs).")
 
-    # ---- (d) Vs perlu ----
-    Vs_perlu = max(0.0, Vu / Phi_v - Vc)   # kN
-
-    # ---- (e) Vs maksimum -- SNI 22.5.1.2 ----
-    Vs_max = 0.66 * math.sqrt(fc) * b * d_aktual / 1000.0   # kN
+    Vs_perlu = max(0.0, Vu / Phi_v - Vc)
+    Vs_max   = 0.66 * math.sqrt(fc) * b * d_aktual / 1000.0
     ok_Vs_max = (Vs_perlu <= Vs_max)
 
-    # ---- (f) Av terpasang per spasi ----
-    Av_pasang = n_kaki * (math.pi / 4.0) * ds ** 2   # mm2
+    Av_pasang = n_kaki * (math.pi / 4.0) * ds ** 2
 
-    # ---- (g) Spasi maksimum -- SNI 9.7.6.2.2 ----
-    Vs_batas_spasi = 0.33 * math.sqrt(fc) * b * d_aktual / 1000.0   # kN
+    Vs_batas_spasi = 0.33 * math.sqrt(fc) * b * d_aktual / 1000.0
     if Vs_perlu <= Vs_batas_spasi:
         s_max = min(d_aktual / 2.0, 600.0)
         rumus_smax = (f"Vs_perlu = {Vs_perlu:.2f} kN <= 0.33 sqrt(fc) b d / 1000 "
@@ -382,108 +341,276 @@ def hitung_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, lambda_=1.0):
                       f"min({d_aktual/4.0:.1f} , 300) = {s_max:.1f} mm")
     ok_spasi = (s_seng <= s_max)
 
-    # ---- (h) Av minimum -- SNI 9.6.3.3 ----
-    AvS_minA = 0.062 * math.sqrt(fc) * b / fyt   # mm2/mm
-    AvS_minB = 0.35 * b / fyt                    # mm2/mm
+    AvS_minA = 0.062 * math.sqrt(fc) * b / fyt
+    AvS_minB = 0.35 * b / fyt
     AvS_min  = max(AvS_minA, AvS_minB)
-    Av_min   = AvS_min * s_seng                  # mm2
+    Av_min   = AvS_min * s_seng
     ok_Av    = (Av_pasang >= Av_min)
 
-    # ---- (i) Vs aktual dari sengkang terpasang -- SNI 22.5.10.5.3 ----
-    Vs_aktual = (Av_pasang * fyt * d_aktual / s_seng) / 1000.0   # kN
-
-    # ---- (j) Vn dan Phi.Vn ----
-    Vn      = Vc + Vs_aktual
-    PhiVn   = Phi_v * Vn
-
-    # Batasi Vs efektif ke Vs_max untuk perhitungan Phi.Vn yang konservatif
+    Vs_aktual  = (Av_pasang * fyt * d_aktual / s_seng) / 1000.0
     Vs_efektif = min(Vs_aktual, Vs_max)
     Vn_efektif = Vc + Vs_efektif
     PhiVn_efektif = Phi_v * Vn_efektif
-
-    # ---- (k) D/C Geser ----
-    DC_geser = Vu / PhiVn_efektif if PhiVn_efektif > 0 else float("inf")
-    ok_dc_geser = (DC_geser <= 1.0)
-
-    # Status keseluruhan geser
-    ok_geser_total = (ok_dc_geser and ok_Vs_max and ok_spasi and ok_Av)
+    DC_geser   = Vu / PhiVn_efektif if PhiVn_efektif > 0 else float("inf")
+    ok_dc      = (DC_geser <= 1.0)
+    ok_total   = ok_dc and ok_Vs_max and ok_Av and ok_spasi
 
     G.update(dict(
-        Phi_v=Phi_v,
-        Vc=Vc, Vc_N=Vc_N,
-        half_phiVc=half_phiVc, phiVc=phiVc,
+        Phi_v=Phi_v, lambda_=lambda_,
+        Vc_N=Vc_N, Vc=Vc, half_phiVc=half_phiVc, phiVc=phiVc,
         klas_seng=klas_seng, ket_klas=ket_klas,
         Vs_perlu=Vs_perlu, Vs_max=Vs_max, ok_Vs_max=ok_Vs_max,
         Av_pasang=Av_pasang,
-        Vs_batas_spasi=Vs_batas_spasi, s_max=s_max, rumus_smax=rumus_smax,
-        ok_spasi=ok_spasi,
         AvS_minA=AvS_minA, AvS_minB=AvS_minB, AvS_min=AvS_min,
         Av_min=Av_min, ok_Av=ok_Av,
+        s_max=s_max, rumus_smax=rumus_smax, ok_spasi=ok_spasi,
         Vs_aktual=Vs_aktual, Vs_efektif=Vs_efektif,
-        Vn=Vn, PhiVn=PhiVn,
         Vn_efektif=Vn_efektif, PhiVn_efektif=PhiVn_efektif,
-        Vu=Vu, DC_geser=DC_geser, ok_dc=ok_dc_geser,
-        ok_total=ok_geser_total,
-        # input echo
-        fc=fc, fyt=fyt, b=b, d=d_aktual,
-        ds=ds, s=s_seng, n_kaki=n_kaki, lambda_=lambda_,
+        DC_geser=DC_geser, ok_dc=ok_dc, ok_total=ok_total,
+        Vu=Vu,
     ))
     return G
+
+
+# ============================================================
+# FUNGSI EVALUASI TORSI (SNI 2847:2019 Pasal 22.7) -- TAHAP 2
+# ============================================================
+def hitung_torsi(fc, fy_long, fyt, b, h, cc_sel, ds, s_seng,
+                 Tu, Vu, Vc, d_aktual, Av_pasang_geser,
+                 tipe_torsi, db_long_torsi, lambda_=1.0):
+    """
+    Evaluasi torsi balok beton bertulang sesuai SNI 2847:2019 Pasal 22.7.
+
+    Parameter
+    ---------
+    fc            : kuat tekan beton (MPa)
+    fy_long       : kuat leleh tulangan longitudinal torsi (MPa)
+    fyt           : kuat leleh sengkang (MPa)
+    b, h          : dimensi penampang (mm)
+    cc_sel        : tebal selimut bersih (mm)
+    ds            : diameter sengkang (mm)
+    s_seng        : jarak sengkang terpasang (mm)
+    Tu            : momen torsi ultimit (kN.m)
+    Vu            : gaya geser ultimit (kN) -- dari hasil geser
+    Vc            : kapasitas geser beton (kN) -- dari hasil geser
+    d_aktual      : tinggi efektif (mm) -- dari hasil lentur
+    Av_pasang_geser: Av terpasang untuk geser (mm2) -- dari hasil geser
+    tipe_torsi    : "Equilibrium" atau "Compatibility"
+    db_long_torsi : diameter tulangan longitudinal torsi (mm)
+    lambda_       : faktor beton ringan (1.0 normal)
+
+    Returns
+    -------
+    dict hasil evaluasi torsi
+    """
+    T = {}
+    Phi_t = 0.75   # SNI 2847:2019 Pasal 21.2.1
+
+    # -- b19: Properti penampang torsi --
+    Acp = b * h                              # mm2
+    pcp = 2.0 * (b + h)                     # mm
+
+    x1  = b - 2.0 * cc_sel - ds             # mm - dimensi pendek sengkang (c to c)
+    y1  = h - 2.0 * cc_sel - ds             # mm - dimensi panjang sengkang (c to c)
+    Aoh = x1 * y1                           # mm2
+    ph  = 2.0 * (x1 + y1)                  # mm
+    Ao  = 0.85 * Aoh                        # mm2
+
+    # -- b20: Faktor reduksi --
+    # Phi_t = 0.75 (sudah di atas)
+
+    # -- b21: Batas ambang torsi (Tth) SNI Pasal 22.7.4 --
+    Tth_Nmm = 0.083 * lambda_ * math.sqrt(fc) * (Acp ** 2 / pcp)   # N.mm
+    Tth      = Tth_Nmm / 1_000_000.0                                 # kN.m
+    phi_Tth  = Phi_t * Tth
+
+    Tu_Nmm = Tu * 1_000_000.0   # konversi kN.m -> N.mm
+    abaikan_torsi = (Tu <= phi_Tth)
+
+    # -- b22: Klasifikasi & Tu desain --
+    Tcr_Nmm = 0.33 * lambda_ * math.sqrt(fc) * (Acp ** 2 / pcp)   # N.mm
+    Tcr      = Tcr_Nmm / 1_000_000.0                               # kN.m
+    phi_Tcr  = Phi_t * Tcr
+
+    if tipe_torsi == "Compatibility" and Tu > phi_Tcr:
+        Tu_desain     = phi_Tcr   # kN.m -- boleh direduksi
+        Tu_desain_Nmm = phi_Tcr * 1_000_000.0
+        catatan_tu    = (f"Torsi Kompatibilitas: Tu ({Tu:.3f} kN.m) > Phi_t x Tcr "
+                         f"({phi_Tcr:.3f} kN.m)\n"
+                         f"  -->  Tu_desain direduksi = Phi_t x Tcr = {Tu_desain:.3f} kN.m")
+    else:
+        Tu_desain     = Tu        # kN.m
+        Tu_desain_Nmm = Tu_Nmm
+        if tipe_torsi == "Equilibrium":
+            catatan_tu = (f"Torsi Keseimbangan: tidak boleh redistribusi\n"
+                          f"  -->  Tu_desain = Tu = {Tu_desain:.3f} kN.m")
+        else:
+            catatan_tu = (f"Torsi Kompatibilitas: Tu ({Tu:.3f} kN.m) <= Phi_t x Tcr "
+                          f"({phi_Tcr:.3f} kN.m)\n"
+                          f"  -->  Tu_desain = Tu = {Tu_desain:.3f} kN.m (tidak direduksi)")
+
+    # -- b23: Cek dimensi penampang (SNI Pasal 22.7.7.1) --
+    # sqrt( (Vu/(b*d))^2 + (Tu*ph/(1.7*Aoh^2))^2 ) <= Phi_v*(Vc/(b*d) + 0.66*sqrt(fc))
+    # Vu dalam N, Tu dalam N.mm, b dan d dalam mm
+    Vu_N       = Vu * 1000.0
+    Vc_N_val   = Vc * 1000.0
+    Phi_v      = 0.75
+
+    term_geser = Vu_N / (b * d_aktual)                               # N/mm2 = MPa
+    term_torsi = Tu_desain_Nmm * ph / (1.7 * Aoh ** 2)              # MPa
+    lhs_dim    = math.sqrt(term_geser ** 2 + term_torsi ** 2)       # MPa
+
+    rhs_dim    = Phi_v * (Vc_N_val / (b * d_aktual) + 0.66 * math.sqrt(fc))  # MPa
+    ok_dimensi = (lhs_dim <= rhs_dim)
+    DC_dim     = lhs_dim / rhs_dim if rhs_dim > 0 else float("inf")
+
+    # -- b24: At/s untuk torsi (SNI Pasal 22.7.6.1) --
+    # theta = 45 deg -> cot(theta) = 1.0
+    # At/s = Tu_desain / (Phi_t x 2 x Ao x fyt x cot(theta))
+    cot_theta = 1.0
+    At_per_s  = Tu_desain_Nmm / (Phi_t * 2.0 * Ao * fyt * cot_theta)   # mm2/mm
+
+    # -- b25: Sengkang gabungan geser + torsi (SNI Pasal 9.6.4.2) --
+    # (Av/s) geser dari tulangan terpasang
+    Av_per_s_pasang = Av_pasang_geser / s_seng                # mm2/mm
+    # Total kebutuhan per mm = Av/s + 2*At/s
+    Avt_per_s_perlu = Av_per_s_pasang + 2.0 * At_per_s       # mm2/mm
+    Avt_per_s_ada   = Av_pasang_geser / s_seng                # mm2/mm (yg terpasang untuk geser)
+
+    # Cek apakah perlu tambah sengkang atau spasi diperketat
+    Avt_pasang      = Av_pasang_geser        # luas sengkang terpasang (mm2)
+    Avt_perlu_abs   = Avt_per_s_perlu * s_seng   # mm2 yang dibutuhkan pada s yg sama
+
+    # Spasi yg diperlukan jika pakai sengkang yg sama
+    if Avt_per_s_perlu > 0:
+        s_perlu_gabungan = Av_pasang_geser / Avt_per_s_perlu
+    else:
+        s_perlu_gabungan = s_seng
+    ok_sengkang_gabungan = (Av_pasang_geser >= Avt_perlu_abs)
+
+    # -- Av+2At minimum (SNI Pasal 9.6.4.2) --
+    AvtS_minA = 0.062 * math.sqrt(fc) * b / fyt    # mm2/mm
+    AvtS_minB = 0.35 * b / fyt                     # mm2/mm
+    AvtS_min  = max(AvtS_minA, AvtS_minB)
+    Avt_min   = AvtS_min * s_seng                  # mm2
+    ok_Avt_min = (Av_pasang_geser >= Avt_min)
+
+    # -- b26: Spasi maksimum sengkang torsi (SNI Pasal 9.7.6.3.3) --
+    s_max_torsi = min(ph / 8.0, 300.0)
+    ok_spasi_torsi = (s_seng <= s_max_torsi)
+
+    # -- b27: Tulangan longitudinal torsi Al (SNI Pasal 22.7.6.1) --
+    Al = At_per_s * ph * (fyt / fy_long) * (cot_theta ** 2)   # mm2
+
+    # Al minimum (SNI Pasal 9.6.4.3)
+    Al_minA = (0.42 * math.sqrt(fc) * Acp / fy_long
+               - At_per_s * ph * (fyt / fy_long))
+    Al_minB = (0.42 * math.sqrt(fc) * Acp / fy_long
+               - (0.175 * b / fyt) * ph * (fyt / fy_long))
+    Al_min  = max(Al_minA, Al_minB, 0.0)   # tidak boleh negatif
+
+    Al_pakai = max(Al, Al_min)
+
+    # Jumlah batang longitudinal
+    Ab_long   = luas_batang(db_long_torsi)   # mm2 per batang
+    n_batang  = math.ceil(Al_pakai / Ab_long) if Ab_long > 0 else 0
+
+    # -- b28: DC Torsi --
+    # Phi.Tn = Phi_t x 2 x Ao x At_per_s x fyt x cot_theta x (1/ph) x ph
+    # Cara lebih langsung: Phi.Tn = Phi_t x 2 x Ao x (Al/ph) x fy_long / cot^2
+    # Lebih tepat: hitung Tn dari kapasitas
+    # Tn = 2 x Ao x At/s x fyt x cot(theta) [SNI 22.7.6.1]
+    # tapi At/s di sini sudah dari Tu_desain, jadi DC = Tu_desain / (Phi_t * Tn_cap)
+    # Gunakan sengkang yang terpasang untuk Phi.Tn kapasitas:
+    At_per_s_pasang = Av_pasang_geser / (2.0 * s_seng)   # 1/2 Av utk torsi (1 kaki per sisi)
+    # Sebenarnya untuk closed stirrup, setiap kaki = At, jadi:
+    At_per_s_cap    = Av_pasang_geser / s_seng            # konservatif, total kaki / s
+    Tn_cap          = 2.0 * Ao * At_per_s_cap * fyt * cot_theta / 1_000_000.0   # kN.m
+    PhiTn_cap       = Phi_t * Tn_cap
+    DC_torsi        = Tu_desain / PhiTn_cap if PhiTn_cap > 0 else float("inf")
+    ok_DC_torsi     = (DC_torsi <= 1.0)
+
+    ok_torsi_total = (ok_dimensi and ok_sengkang_gabungan and ok_Avt_min
+                      and ok_spasi_torsi and ok_DC_torsi)
+
+    T.update(dict(
+        Phi_t=Phi_t, lambda_=lambda_,
+        Acp=Acp, pcp=pcp, x1=x1, y1=y1, Aoh=Aoh, ph=ph, Ao=Ao,
+        Tth=Tth, phi_Tth=phi_Tth, Tth_Nmm=Tth_Nmm,
+        Tcr=Tcr, phi_Tcr=phi_Tcr,
+        abaikan_torsi=abaikan_torsi,
+        Tu=Tu, Tu_desain=Tu_desain, Tu_desain_Nmm=Tu_desain_Nmm,
+        tipe_torsi=tipe_torsi, catatan_tu=catatan_tu,
+        term_geser=term_geser, term_torsi=term_torsi,
+        lhs_dim=lhs_dim, rhs_dim=rhs_dim,
+        ok_dimensi=ok_dimensi, DC_dim=DC_dim,
+        cot_theta=cot_theta, At_per_s=At_per_s,
+        Av_per_s_pasang=Av_per_s_pasang,
+        Avt_per_s_perlu=Avt_per_s_perlu,
+        Avt_perlu_abs=Avt_perlu_abs,
+        Avt_pasang=Avt_pasang,
+        s_perlu_gabungan=s_perlu_gabungan,
+        ok_sengkang_gabungan=ok_sengkang_gabungan,
+        AvtS_minA=AvtS_minA, AvtS_minB=AvtS_minB,
+        AvtS_min=AvtS_min, Avt_min=Avt_min, ok_Avt_min=ok_Avt_min,
+        s_max_torsi=s_max_torsi, ok_spasi_torsi=ok_spasi_torsi,
+        Al=Al, Al_minA=Al_minA, Al_minB=Al_minB,
+        Al_min=Al_min, Al_pakai=Al_pakai,
+        db_long_torsi=db_long_torsi, Ab_long=Ab_long, n_batang=n_batang,
+        At_per_s_cap=At_per_s_cap, Tn_cap=Tn_cap,
+        PhiTn_cap=PhiTn_cap, DC_torsi=DC_torsi,
+        ok_DC_torsi=ok_DC_torsi, ok_torsi_total=ok_torsi_total,
+        Vu=Vu, Vc=Vc, d_aktual=d_aktual,
+        fy_long=fy_long, fyt=fyt,
+    ))
+    return T
 
 
 # ============================================================
 # BUAT STEP-STEP LAPORAN LENTUR (b1 - b10)
 # ============================================================
 def buat_steps_balok(fc, fy, b, h, cc_sel, ds, lapis_tarik, lapis_tekan, R):
-    Mu = R["Mu"]
-    ok_rho = R["ok_rho_min"] and R["ok_rho_max"]
+    eps_y   = R["eps_y"]
+    ok_rho  = R["ok_rho_min"] and R["ok_rho_max"]
+    Mu      = R["Mu"]
 
     s1 = dict(
         no="b1.", ref="SNI 2847:2019 Pasal 22.2.2.4.3",
-        judul="Faktor blok tegangan ekivalen (Beta-1)",
+        judul="Faktor Beta-1",
         isi=f"{R['beta1_cara']}\n  -->  Beta-1 = {R['beta1']:.4f}",
         ok=True,
     )
 
-    teks_tarik = ""
+    teks_lapis = ""
     for L in lapis_tarik:
-        teks_tarik += (f"  Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
-                       f"As = {L['As']:.1f} mm2  y = {L['y']:.1f} mm\n")
-    teks_tekan = ""
-    if lapis_tekan:
-        for L in lapis_tekan:
-            teks_tekan += (f"  Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
-                           f"As = {L['As']:.1f} mm2  y = {L['y']:.1f} mm\n")
-    else:
-        teks_tekan = "  (Tidak ada tulangan tekan)\n"
+        teks_lapis += (f"  Tarik Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
+                       f"As = {L['As']:.1f} mm2   y (dari atas) = {L['y']:.2f} mm\n")
+    for L in lapis_tekan:
+        teks_lapis += (f"  Tekan Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
+                       f"As' = {L['As']:.1f} mm2   y (dari atas) = {L['y']:.2f} mm\n")
 
     s2 = dict(
-        no="b2.", ref="SNI 2847:2019 Pasal 25.2 - Penempatan tulangan",
-        judul="Posisi tulangan & titik berat (d aktual & d' aktual)",
+        no="b2.", ref="SNI 2847:2019 Pasal 26.6.2 & geom. penampang",
+        judul="Posisi tiap lapis tulangan (dari serat tekan atas)",
         isi=(
-            f"Tulangan TARIK (dari serat tekan teratas):\n"
-            f"{teks_tarik}"
-            f"  d-aktual = Sum(As.y)/Sum(As) = {R['d_tarik']:.2f} mm\n"
-            f"  As-total = {R['As_tarik']:.1f} mm2\n\n"
-            f"Tulangan TEKAN (dari serat tekan teratas):\n"
-            f"{teks_tekan}"
-            + (f"  d'-aktual = {R['d_tekan']:.2f} mm\n"
-               f"  As'-total = {R['As_tekan']:.1f} mm2"
-               if lapis_tekan else "")
+            f"Penentuan posisi y = h - cc - ds - db/2 (tarik bawah)\n"
+            f"                 y = cc + ds + db/2 (tekan atas)\n\n"
+            f"{teks_lapis.rstrip()}\n\n"
+            f"d-aktual  (tarik) = {R['d_tarik']:.2f} mm  (titik berat As-tarik)\n"
+            f"d'-aktual (tekan) = {R['d_tekan']:.2f} mm  (titik berat As-tekan)"
         ),
         ok=True,
     )
 
-    eps_y = R["eps_y"]
     s3 = dict(
-        no="b3.", ref="SNI 2847:2019 Pasal 22.2.1 - Asumsi desain",
-        judul="Strain compatibility - Cari sumbu netral c",
+        no="b3.", ref="SNI 2847:2019 Pasal 22.2.1.1 - eps_cu = 0.003",
+        judul="Iterasi sumbu netral c (bisection, 200 iterasi)",
         isi=(
-            f"Asumsi: regangan tekan beton ekstrim = 0.003\n"
-            f"        regangan leleh baja eps-y = fy/Es = {fy}/200000 = {eps_y:.5f}\n"
-            f"Iterasi bisection untuk Cc + Cs - T = 0\n"
-            f"  -->  c = {R['c']:.2f} mm\n"
-            f"  -->  a = Beta-1 x c = {R['beta1']:.4f} x {R['c']:.2f} = {R['a']:.2f} mm"
+            f"Cari c sehingga Cc + Cs - T = 0\n"
+            f"  a     = Beta-1 x c = {R['beta1']:.4f} x {R['c']:.2f} = {R['a']:.2f} mm\n"
+            f"  Cc    = 0.85 x fc x a x b = 0.85 x {fc} x {R['a']:.2f} x {b} "
+            f"= {R['Cc']:,.0f} N\n"
+            f"  c     = {R['c']:.4f} mm  -->  [OK]"
         ),
         ok=True,
     )
@@ -627,12 +754,9 @@ def buat_steps_balok(fc, fy, b, h, cc_sel, ds, lapis_tarik, lapis_tekan, R):
 
 
 # ============================================================
-# BUAT STEP-STEP LAPORAN GESER (b11 - b18)  -- TAHAP 1
+# BUAT STEP-STEP LAPORAN GESER (b11 - b18)
 # ============================================================
 def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
-    """Susun langkah perhitungan geser b11 s/d b18."""
-
-    # b11 - Phi_v
     s11 = dict(
         no="b11.", ref="SNI 2847:2019 Pasal 21.2.1",
         judul="Faktor reduksi geser (Phi_v)",
@@ -643,7 +767,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=True,
     )
 
-    # b12 - Vc
     s12 = dict(
         no="b12.", ref="SNI 2847:2019 Pasal 22.5.5.1",
         judul="Kapasitas geser beton (Vc)",
@@ -660,7 +783,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=True,
     )
 
-    # b13 - cek kebutuhan sengkang
     s13 = dict(
         no="b13.", ref="SNI 2847:2019 Pasal 9.6.3 & 22.5.1.1",
         judul="Cek kebutuhan sengkang",
@@ -674,7 +796,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=True,
     )
 
-    # b14 - Vs perlu & Vs max
     s14 = dict(
         no="b14.", ref="SNI 2847:2019 Pasal 22.5.1.2",
         judul="Vs perlu & cek Vs maksimum",
@@ -691,7 +812,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=G["ok_Vs_max"],
     )
 
-    # b15 - Av terpasang
     s15 = dict(
         no="b15.", ref="SNI 2847:2019 Pasal 22.5.10.5.3",
         judul="Luas sengkang terpasang (Av) per spasi",
@@ -706,7 +826,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=True,
     )
 
-    # b16 - Av min & spasi maks
     s16 = dict(
         no="b16.", ref="SNI 2847:2019 Pasal 9.6.3.3 & 9.7.6.2.2",
         judul="Av minimum & spasi maksimum sengkang",
@@ -729,7 +848,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=(G["ok_Av"] and G["ok_spasi"]),
     )
 
-    # b17 - Vs aktual & Phi.Vn
     s17 = dict(
         no="b17.", ref="SNI 2847:2019 Pasal 22.5.10.5.3",
         judul="Vs aktual & kapasitas geser rencana (Phi.Vn)",
@@ -750,7 +868,6 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
         ok=True,
     )
 
-    # b18 - D/C Geser
     if G["ok_dc"]:
         ket_dc = "AMAN  --  Phi.Vn >= Vu"
     else:
@@ -773,38 +890,291 @@ def buat_steps_geser(fc, fyt, b, d_aktual, Vu, ds, s_seng, n_kaki, G):
 
 
 # ============================================================
-# PLACEHOLDER UNTUK TAHAP 2 - TORSI (b19 - b25)
+# BUAT STEP-STEP LAPORAN TORSI (b19 - b28) -- TAHAP 2
 # ============================================================
-def buat_steps_torsi(*args, **kwargs):
-    """
-    [PLACEHOLDER] Akan diimplementasi pada sesi berikutnya:
-      b19. Torsi ambang (Tcr) - SNI 22.7.1.1
-      b20. Tu vs Phi.Tcr -- perlu diperhatikan / tidak
-      b21. Cek penampang -- SNI 22.7.7.1
-      b22. Tulangan torsi tertutup (At/s)
-      b23. Tulangan torsi memanjang (Al)
-      b24. Kombinasi geser + torsi (Av+t total)
-      b25. D/C Torsi & kesimpulan
-    """
-    return []
+def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
+                     Tu, Vu, d_aktual, T):
+    """Susun langkah perhitungan torsi b19 s/d b28."""
+
+    if T["abaikan_torsi"]:
+        # Semua langkah dengan status diabaikan
+        s_abaikan = dict(
+            no="b19-b28.", ref="SNI 2847:2019 Pasal 22.7.4",
+            judul="EVALUASI TORSI -- DILEWATI",
+            isi=(
+                f"Tu = {Tu:.3f} kN.m\n"
+                f"Phi_t x Tth = {T['Phi_t']:.2f} x {T['Tth']:.3f} = {T['phi_Tth']:.3f} kN.m\n\n"
+                f"Karena Tu ({Tu:.3f}) <= Phi_t x Tth ({T['phi_Tth']:.3f}) kN.m\n"
+                f"  -->  [DIABAIKAN] Efek torsi dapat diabaikan sesuai SNI 2847:2019 Pasal 22.7.4"
+            ),
+            ok=True,
+        )
+        return [s_abaikan]
+
+    # -- b19: Properti penampang --
+    s19 = dict(
+        no="b19.", ref="SNI 2847:2019 Pasal 22.7",
+        judul="Properti penampang torsi",
+        isi=(
+            f"Acp = b x h = {b:.0f} x {h:.0f} = {T['Acp']:,.0f} mm2\n"
+            f"pcp = 2 x (b + h) = 2 x ({b:.0f} + {h:.0f}) = {T['pcp']:.0f} mm\n\n"
+            f"Dimensi sengkang tertutup (c to c):\n"
+            f"  x1 = b - 2 cc - ds = {b:.0f} - 2x{cc_sel:.0f} - {ds:.0f} "
+            f"= {T['x1']:.1f} mm\n"
+            f"  y1 = h - 2 cc - ds = {h:.0f} - 2x{cc_sel:.0f} - {ds:.0f} "
+            f"= {T['y1']:.1f} mm\n\n"
+            f"Aoh = x1 x y1 = {T['x1']:.1f} x {T['y1']:.1f} = {T['Aoh']:,.1f} mm2\n"
+            f"ph  = 2 x (x1 + y1) = 2 x ({T['x1']:.1f} + {T['y1']:.1f}) "
+            f"= {T['ph']:.1f} mm\n"
+            f"Ao  = 0.85 x Aoh = 0.85 x {T['Aoh']:,.1f} = {T['Ao']:,.1f} mm2"
+        ),
+        ok=True,
+    )
+
+    # -- b20: Faktor reduksi --
+    s20 = dict(
+        no="b20.", ref="SNI 2847:2019 Pasal 21.2.1",
+        judul="Faktor reduksi torsi (Phi_t)",
+        isi=(
+            f"Untuk evaluasi torsi balok beton bertulang:\n"
+            f"  -->  Phi_t = {T['Phi_t']:.2f}"
+        ),
+        ok=True,
+    )
+
+    # -- b21: Batas ambang torsi --
+    s21 = dict(
+        no="b21.", ref="SNI 2847:2019 Pasal 22.7.4",
+        judul="Batas ambang torsi (Tth)",
+        isi=(
+            f"Tth = 0.083 x lambda x sqrt(fc) x (Acp^2 / pcp)    (N.mm)\n"
+            f"    = 0.083 x {T['lambda_']:.2f} x sqrt({fc:.1f}) x "
+            f"({T['Acp']:,.0f}^2 / {T['pcp']:.0f})\n"
+            f"    = 0.083 x {T['lambda_']:.2f} x {math.sqrt(fc):.4f} x "
+            f"{T['Acp']**2/T['pcp']:,.0f}\n"
+            f"    = {T['Tth_Nmm']:,.0f} N.mm = {T['Tth']:.4f} kN.m\n\n"
+            f"Phi_t x Tth = {T['Phi_t']:.2f} x {T['Tth']:.4f} = {T['phi_Tth']:.4f} kN.m\n\n"
+            f"Tu = {Tu:.3f} kN.m\n"
+            f"Kontrol Tu ({Tu:.3f}) vs Phi_t x Tth ({T['phi_Tth']:.4f})\n"
+            f"  -->  {'[DIABAIKAN]' if T['abaikan_torsi'] else '[HITUNG TORSI] Tu > Phi_t x Tth'}"
+        ),
+        ok=True,
+    )
+
+    # -- b22: Klasifikasi & Tu desain --
+    s22 = dict(
+        no="b22.", ref="SNI 2847:2019 Pasal 22.7.3",
+        judul="Klasifikasi torsi & Tu desain",
+        isi=(
+            f"Tipe torsi : {T['tipe_torsi']}\n"
+            f"Tcr = 0.33 x lambda x sqrt(fc) x (Acp^2 / pcp)\n"
+            f"    = 0.33 x {T['lambda_']:.2f} x {math.sqrt(fc):.4f} x "
+            f"{T['Acp']**2/T['pcp']:,.0f} / 1e6\n"
+            f"    = {T['Tcr']:.4f} kN.m\n"
+            f"Phi_t x Tcr = {T['Phi_t']:.2f} x {T['Tcr']:.4f} = {T['phi_Tcr']:.4f} kN.m\n\n"
+            f"{T['catatan_tu']}\n"
+            f"  -->  Tu_desain = {T['Tu_desain']:.4f} kN.m"
+        ),
+        ok=True,
+    )
+
+    # -- b23: Cek dimensi penampang --
+    ok_dim = T["ok_dimensi"]
+    s23 = dict(
+        no="b23.", ref="SNI 2847:2019 Pasal 22.7.7.1",
+        judul="Cek dimensi penampang (kombinasi geser + torsi)",
+        isi=(
+            f"Syarat: sqrt( (Vu/(b*d))^2 + (Tu*ph/(1.7*Aoh^2))^2 ) <= Phi_v*(Vc/(b*d) + 0.66*sqrt(fc))\n\n"
+            f"Term geser  = Vu / (b x d) = {T['Vu']*1000:.0f} / ({b:.0f} x {d_aktual:.2f})\n"
+            f"            = {T['term_geser']:.4f} MPa\n\n"
+            f"Term torsi  = Tu_desain x ph / (1.7 x Aoh^2)\n"
+            f"            = {T['Tu_desain_Nmm']:,.0f} x {T['ph']:.1f} / (1.7 x {T['Aoh']:,.1f}^2)\n"
+            f"            = {T['term_torsi']:.4f} MPa\n\n"
+            f"LHS = sqrt( {T['term_geser']:.4f}^2 + {T['term_torsi']:.4f}^2 )\n"
+            f"    = {T['lhs_dim']:.4f} MPa\n\n"
+            f"RHS = Phi_v x (Vc/(b*d) + 0.66 sqrt(fc))\n"
+            f"    = {T['Vu']*0+0.75:.2f} x ({T['Vc']*1000:.0f}/({b:.0f}x{d_aktual:.2f}) + 0.66x{math.sqrt(fc):.4f})\n"
+            f"    = {T['rhs_dim']:.4f} MPa\n\n"
+            f"D/C dimensi = {T['DC_dim']:.3f}\n"
+            f"  -->  {'[OK] Dimensi penampang mencukupi' if ok_dim else '[TIDAK OK] Penampang harus diperbesar!'}"
+        ),
+        ok=ok_dim,
+    )
+
+    # -- b24: At/s untuk torsi --
+    s24 = dict(
+        no="b24.", ref="SNI 2847:2019 Pasal 22.7.6.1",
+        judul="Tulangan sengkang tertutup untuk torsi (At/s)",
+        isi=(
+            f"At/s = Tu_desain / (Phi_t x 2 x Ao x fyt x cot(theta))\n"
+            f"     (theta = 45 deg, cot(theta) = 1.0)\n\n"
+            f"At/s = {T['Tu_desain_Nmm']:,.0f} / ({T['Phi_t']:.2f} x 2 x "
+            f"{T['Ao']:,.1f} x {fyt:.0f} x {T['cot_theta']:.1f})\n"
+            f"     = {T['At_per_s']:.6f} mm2/mm"
+        ),
+        ok=True,
+    )
+
+    # -- b25: Sengkang gabungan --
+    s25 = dict(
+        no="b25.", ref="SNI 2847:2019 Pasal 9.6.4.2",
+        judul="Sengkang gabungan geser + torsi (Av + 2At)",
+        isi=(
+            f"Av/s terpasang (geser) = Av_pasang / s\n"
+            f"                      = {T['Avt_pasang']:.2f} / {s_seng:.0f}\n"
+            f"                      = {T['Av_per_s_pasang']:.4f} mm2/mm\n\n"
+            f"At/s perlu (torsi)    = {T['At_per_s']:.6f} mm2/mm\n"
+            f"2 x At/s              = {2*T['At_per_s']:.6f} mm2/mm\n\n"
+            f"(Av + 2At)/s perlu    = {T['Av_per_s_pasang']:.4f} + "
+            f"{2*T['At_per_s']:.6f}\n"
+            f"                      = {T['Avt_per_s_perlu']:.6f} mm2/mm\n\n"
+            f"(Av + 2At) perlu pada s = {s_seng:.0f} mm\n"
+            f"  = {T['Avt_per_s_perlu']:.6f} x {s_seng:.0f} = {T['Avt_perlu_abs']:.2f} mm2\n\n"
+            f"Av_pasang (ada)       = {T['Avt_pasang']:.2f} mm2\n"
+            f"  -->  {'[OK]' if T['ok_sengkang_gabungan'] else f'[TIDAK OK] Perlu s <= {T[\"s_perlu_gabungan\"]:.0f} mm'}\n\n"
+            f"-- Av+2At minimum (SNI 9.6.4.2) --\n"
+            f"(Av+2At)_min/s = max(0.062 sqrt(fc) b/fyt , 0.35 b/fyt)\n"
+            f"               = max({T['AvtS_minA']:.4f} , {T['AvtS_minB']:.4f}) "
+            f"= {T['AvtS_min']:.4f} mm2/mm\n"
+            f"(Av+2At)_min   = {T['AvtS_min']:.4f} x {s_seng:.0f} = {T['Avt_min']:.2f} mm2\n"
+            f"Kontrol Av_pasang ({T['Avt_pasang']:.2f}) >= (Av+2At)_min ({T['Avt_min']:.2f})  "
+            f"-->  {'[OK]' if T['ok_Avt_min'] else '[TIDAK OK]'}"
+        ),
+        ok=(T["ok_sengkang_gabungan"] and T["ok_Avt_min"]),
+    )
+
+    # -- b26: Spasi maksimum & kontrol --
+    s26 = dict(
+        no="b26.", ref="SNI 2847:2019 Pasal 9.7.6.3.3",
+        judul="Spasi maksimum sengkang torsi",
+        isi=(
+            f"s_max_torsi = min(ph/8 , 300 mm)\n"
+            f"            = min({T['ph']:.1f}/8 , 300)\n"
+            f"            = min({T['ph']/8:.1f} , 300)\n"
+            f"            = {T['s_max_torsi']:.1f} mm\n\n"
+            f"s_pasang = {s_seng:.0f} mm\n"
+            f"Kontrol s_pasang ({s_seng:.0f}) <= s_max_torsi ({T['s_max_torsi']:.1f})  "
+            f"-->  {'[OK]' if T['ok_spasi_torsi'] else '[TIDAK OK]'}"
+        ),
+        ok=T["ok_spasi_torsi"],
+    )
+
+    # -- b27: Tulangan longitudinal torsi --
+    s27 = dict(
+        no="b27.", ref="SNI 2847:2019 Pasal 22.7.6.1 & 9.6.4.3",
+        judul="Tulangan longitudinal torsi (Al)",
+        isi=(
+            f"Al = (At/s) x ph x (fyt/fy_long) x cot^2(theta)\n"
+            f"   = {T['At_per_s']:.6f} x {T['ph']:.1f} x ({fyt:.0f}/{T['fy_long']:.0f}) x 1.0\n"
+            f"   = {T['Al']:.2f} mm2\n\n"
+            f"Al_min (SNI 9.6.4.3):\n"
+            f"  Al_minA = 0.42 sqrt(fc) Acp/fy_long - (At/s) ph (fyt/fy_long)\n"
+            f"          = 0.42 x {math.sqrt(fc):.4f} x {T['Acp']:,.0f}/{T['fy_long']:.0f} "
+            f"- {T['At_per_s']:.6f} x {T['ph']:.1f} x ({fyt:.0f}/{T['fy_long']:.0f})\n"
+            f"          = {T['Al_minA']:.2f} mm2\n"
+            f"  Al_minB = 0.42 sqrt(fc) Acp/fy_long - (0.175b/fyt) ph (fyt/fy_long)\n"
+            f"          = 0.42 x {math.sqrt(fc):.4f} x {T['Acp']:,.0f}/{T['fy_long']:.0f} "
+            f"- (0.175x{b:.0f}/{fyt:.0f}) x {T['ph']:.1f} x ({fyt:.0f}/{T['fy_long']:.0f})\n"
+            f"          = {T['Al_minB']:.2f} mm2\n"
+            f"  Al_min  = max(Al_minA, Al_minB, 0) = {T['Al_min']:.2f} mm2\n\n"
+            f"Al_pakai  = max(Al , Al_min) = max({T['Al']:.2f} , {T['Al_min']:.2f})\n"
+            f"          = {T['Al_pakai']:.2f} mm2\n\n"
+            f"Diameter longitudinal torsi dipilih: D{int(T['db_long_torsi'])}\n"
+            f"  Ab_long = pi/4 x {T['db_long_torsi']:.0f}^2 = {T['Ab_long']:.2f} mm2\n"
+            f"  n_batang = ceil(Al_pakai / Ab_long) = ceil({T['Al_pakai']:.2f} / {T['Ab_long']:.2f})\n"
+            f"           = {T['n_batang']} batang D{int(T['db_long_torsi'])}\n\n"
+            f"Rekomendasi distribusi: minimal 1 batang di tiap sudut sengkang tertutup,\n"
+            f"  sisanya distribusikan di sisi panjang dengan spasi max 300 mm."
+        ),
+        ok=True,
+    )
+
+    # -- b28: DC Torsi & Kesimpulan --
+    if T["ok_DC_torsi"]:
+        ket_dc_t = "AMAN  --  Phi.Tn >= Tu_desain"
+    else:
+        ket_dc_t = "TIDAK AMAN  --  Phi.Tn < Tu_desain (perkecil spasi / tambah sengkang)"
+
+    s28 = dict(
+        no="b28.", ref="SNI 2847:2019 Pasal 9.5.1.2",
+        judul="D/C Ratio (Demand-to-Capacity) - TORSI & Kesimpulan",
+        isi=(
+            f"Kapasitas Phi.Tn (dari sengkang terpasang):\n"
+            f"  At/s_cap = Av_pasang / s = {T['Avt_pasang']:.2f} / {s_seng:.0f} "
+            f"= {T['At_per_s_cap']:.4f} mm2/mm\n"
+            f"  Tn_cap = 2 x Ao x At/s_cap x fyt x cot(theta) / 1e6\n"
+            f"         = 2 x {T['Ao']:,.1f} x {T['At_per_s_cap']:.4f} x {fyt:.0f} x 1.0 / 1e6\n"
+            f"         = {T['Tn_cap']:.4f} kN.m\n"
+            f"  Phi.Tn = {T['Phi_t']:.2f} x {T['Tn_cap']:.4f} = {T['PhiTn_cap']:.4f} kN.m\n\n"
+            f"D/C = Tu_desain / Phi.Tn\n"
+            f"    = {T['Tu_desain']:.4f} / {T['PhiTn_cap']:.4f}\n"
+            f"    = {T['DC_torsi']:.3f}\n\n"
+            f"{ket_dc_t}\n\n"
+            f"-- Rangkuman kontrol torsi --\n"
+            f"Dimensi penampang    : {'[OK]' if T['ok_dimensi'] else '[TIDAK OK]'}\n"
+            f"Sengkang gabungan    : {'[OK]' if T['ok_sengkang_gabungan'] else '[TIDAK OK]'}\n"
+            f"(Av+2At) minimum     : {'[OK]' if T['ok_Avt_min'] else '[TIDAK OK]'}\n"
+            f"Spasi max torsi      : {'[OK]' if T['ok_spasi_torsi'] else '[TIDAK OK]'}\n"
+            f"D/C torsi <= 1.0     : {'[OK]' if T['ok_DC_torsi'] else '[TIDAK OK]'}"
+        ),
+        ok=T["ok_torsi_total"],
+    )
+
+    return [s19, s20, s21, s22, s23, s24, s25, s26, s27, s28]
 
 
 # ============================================================
-# VISUALISASI PENAMPANG (matplotlib)
+# VISUALISASI PENAMPANG (matplotlib) -- UPDATED dengan Aoh
 # ============================================================
-def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan, c=None):
-    """Gambar cross-section balok proporsional."""
-    fig, ax = plt.subplots(figsize=(5.2, 6.2))
+def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan,
+                     c=None, torsi_data=None):
+    """Gambar cross-section balok proporsional. torsi_data = dict T dari hitung_torsi."""
+    fig, ax = plt.subplots(figsize=(5.5, 6.5))
 
+    # Penampang beton
     ax.add_patch(patches.Rectangle((0, 0), b, h, fill=True,
                                    facecolor="#e8e8e8", edgecolor="black",
                                    linewidth=1.8))
 
+    # Sengkang (selimut)
     sx, sy, sw, sh = cc_sel, cc_sel, b - 2*cc_sel, h - 2*cc_sel
     ax.add_patch(patches.Rectangle((sx, sy), sw, sh, fill=False,
                                    edgecolor="#1a3c5e", linewidth=1.2,
                                    linestyle="--"))
 
+    # Area Aoh (jika ada data torsi)
+    if torsi_data is not None and not torsi_data.get("abaikan_torsi", True):
+        x1 = torsi_data["x1"]
+        y1_t = torsi_data["y1"]
+        # Aoh dimulai dari tengah sengkang
+        xoh = cc_sel + ds / 2.0
+        yoh = cc_sel + ds / 2.0
+        ax.add_patch(patches.Rectangle((xoh, yoh), x1, y1_t,
+                                       fill=True,
+                                       facecolor="#ff9800", alpha=0.12,
+                                       edgecolor="#e65100", linewidth=1.0,
+                                       linestyle=":"))
+        ax.annotate(f"Aoh = {x1:.0f} x {y1_t:.0f} = {torsi_data['Aoh']:,.0f} mm2",
+                    xy=(b / 2, yoh + y1_t / 2), fontsize=7.5,
+                    ha="center", va="center", color="#e65100",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7))
+
+        # Plot tulangan longitudinal torsi di sudut
+        if torsi_data.get("n_batang", 0) > 0:
+            db_lt = torsi_data["db_long_torsi"]
+            r_lt  = db_lt / 2.0
+            corners = [
+                (xoh, yoh),
+                (xoh + x1, yoh),
+                (xoh, yoh + y1_t),
+                (xoh + x1, yoh + y1_t),
+            ]
+            for cx_, cy_ in corners:
+                ax.add_patch(patches.Circle((cx_, cy_), r_lt,
+                                            facecolor="#9e9e9e",
+                                            edgecolor="black", linewidth=0.6))
+
+    # Tulangan tarik
     for L in lapis_tarik:
         y_plot = h - L["y"]
         n = L["n"]
@@ -822,6 +1192,7 @@ def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan, c=None):
                     xy=(b + 8, y_plot), fontsize=8,
                     va="center", color="#1a3c5e")
 
+    # Tulangan tekan
     for L in lapis_tekan:
         y_plot = h - L["y"]
         n = L["n"]
@@ -839,6 +1210,7 @@ def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan, c=None):
                     xy=(b + 8, y_plot), fontsize=8,
                     va="center", color="#c62828")
 
+    # Garis netral
     if c is not None:
         y_c_plot = h - c
         ax.axhline(y=y_c_plot, color="#f9a825", linewidth=1.4,
@@ -851,6 +1223,17 @@ def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan, c=None):
                 fontsize=9, ha="center", color="black")
     ax.annotate(f"h = {int(h)} mm", xy=(-b*0.10, h/2),
                 fontsize=9, ha="center", color="black", rotation=90)
+
+    # Legend sederhana jika ada torsi
+    if torsi_data is not None and not torsi_data.get("abaikan_torsi", True):
+        legend_elems = [
+            patches.Patch(facecolor="#ff9800", alpha=0.3, edgecolor="#e65100",
+                          linestyle=":", label="Area Aoh (torsi)"),
+            patches.Patch(facecolor="#9e9e9e", edgecolor="black",
+                          label=f"Tul. long. torsi D{int(torsi_data['db_long_torsi'])}"),
+        ]
+        ax.legend(handles=legend_elems, loc="upper right", fontsize=7,
+                  framealpha=0.8)
 
     pad = max(b, h) * 0.18
     ax.set_xlim(-pad, b + pad * 1.6)
@@ -872,149 +1255,161 @@ def fig_to_png_bytes(fig):
 
 
 # ============================================================
-# GENERATOR WORD (.docx)
+# GENERATOR WORD (.docx) -- UPDATED dengan Torsi
 # ============================================================
 def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
                       R, steps, nama_proyek, png_buf,
                       G=None, steps_geser=None, geser_inputs=None,
+                      Tor=None, steps_torsi=None, torsi_inputs=None,
                       timestamp_str=None):
-    """
-    Generator laporan Word.
-    G            : dict hasil evaluasi geser (None bila belum dihitung)
-    steps_geser  : list step b11-b18 (None bila belum)
-    geser_inputs : dict {Vu, fyt, s_seng, n_kaki}
-    timestamp_str: string "DD Month YYYY  HH:MM"
-    """
     doc = Document()
-    for sec in doc.sections:
-        sec.page_width    = Cm(21);  sec.page_height   = Cm(29.7)
-        sec.left_margin   = Cm(3);   sec.right_margin  = Cm(2.5)
-        sec.top_margin    = Cm(3);   sec.bottom_margin = Cm(2.5)
 
-    def par(teks="", bold=False, size=11, indent=0, space_after=4,
-            align=WD_ALIGN_PARAGRAPH.LEFT, color=None, italic=False):
+    # -- Pengaturan margin --
+    for sect in doc.sections:
+        sect.top_margin    = Cm(2.5)
+        sect.bottom_margin = Cm(2.5)
+        sect.left_margin   = Cm(3.0)
+        sect.right_margin  = Cm(2.5)
+
+    # -- Gaya helper --
+    def par(teks="", bold=False, italic=False, size=11, indent=0.0,
+            align=WD_ALIGN_PARAGRAPH.LEFT, color=None, space_after=6):
         p = doc.add_paragraph()
-        p.alignment = align
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after  = Pt(space_after)
+        p.alignment = align
         if indent:
             p.paragraph_format.left_indent = Cm(indent)
-        if teks:
-            r = p.add_run(teks)
-            r.bold = bold; r.italic = italic; r.font.size = Pt(size)
-            if color:  r.font.color.rgb = RGBColor(*color)
+        r = p.add_run(teks)
+        r.bold = bold; r.italic = italic
+        r.font.size = Pt(size); r.font.name = "Calibri"
+        if color:
+            r.font.color.rgb = RGBColor(*color)
         return p
 
-    def garis():
+    def judul_utama(teks):
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
-        run = p.add_run("_" * 72)
-        run.font.size = Pt(9); run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(4)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = p.add_run(teks); r.bold = True; r.font.size = Pt(14)
+        r.font.name = "Calibri"; r.font.color.rgb = RGBColor(26, 60, 94)
 
     def subjudul(teks):
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(10); p.paragraph_format.space_after = Pt(4)
-        r = p.add_run(teks); r.bold = True; r.font.size = Pt(11)
-        r.font.color.rgb = RGBColor(0x1A, 0x3C, 0x5E)
-        garis()
+        p.paragraph_format.space_before = Pt(8); p.paragraph_format.space_after = Pt(4)
+        r = p.add_run(teks); r.bold = True; r.font.size = Pt(11.5)
+        r.font.name = "Calibri"; r.font.color.rgb = RGBColor(26, 60, 94)
+        pf = p.paragraph_format
+        pf.border_bottom = None
 
-    def tulis_steps(steps_):
-        for s in steps_:
-            p_hdr = doc.add_paragraph()
-            p_hdr.paragraph_format.space_before = Pt(8); p_hdr.paragraph_format.space_after = Pt(1)
-            r_no = p_hdr.add_run(f"{s['no']}  "); r_no.bold = True
-            r_no.font.size = Pt(10); r_no.font.color.rgb = RGBColor(0x1A, 0x3C, 0x5E)
-            r_jdl = p_hdr.add_run(s["judul"]); r_jdl.bold = True; r_jdl.font.size = Pt(10)
-            p_ref = doc.add_paragraph()
-            p_ref.paragraph_format.space_before = Pt(0); p_ref.paragraph_format.space_after = Pt(2)
-            p_ref.paragraph_format.left_indent  = Cm(0.5)
-            r_ref = p_ref.add_run(f"[{s['ref']}]"); r_ref.italic = True
-            r_ref.font.size = Pt(8.5); r_ref.font.color.rgb = RGBColor(0x15, 0x65, 0xC0)
+    def garis():
+        par("", space_after=2)
+        p = doc.add_paragraph()
+        p.paragraph_format.border_bottom = None
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(4)
+
+    def tulis_steps(steps_list):
+        for s in steps_list:
+            ok_col = (0x1B, 0x5E, 0x20) if s["ok"] else (0xB7, 0x1C, 0x1C)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(1)
+            r1 = p.add_run(f"{s['no']} {s['judul']}")
+            r1.bold = True; r1.font.size = Pt(10.5); r1.font.name = "Calibri"
+            r1.font.color.rgb = RGBColor(26, 60, 94)
+
+            p2 = doc.add_paragraph()
+            p2.paragraph_format.space_before = Pt(0); p2.paragraph_format.space_after = Pt(0)
+            p2.paragraph_format.left_indent = Cm(0.4)
+            r2 = p2.add_run(f"[{s['ref']}]")
+            r2.italic = True; r2.font.size = Pt(9); r2.font.name = "Calibri"
+            r2.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
+
             for baris in s["isi"].split("\n"):
-                p_b = doc.add_paragraph()
-                p_b.paragraph_format.space_before = Pt(0); p_b.paragraph_format.space_after = Pt(1)
-                p_b.paragraph_format.left_indent  = Cm(0.5)
-                r_b = p_b.add_run(baris if baris.strip() else " ")
-                r_b.font.name = "Courier New"; r_b.font.size = Pt(9.5)
-                if (baris.strip().startswith("-->") or "[OK]" in baris
-                    or "[TIDAK OK]" in baris or "AMAN" in baris):
-                    r_b.bold = True
-                    r_b.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if s["ok"]
-                                          else RGBColor(0xB7, 0x1C, 0x1C))
+                is_result = (baris.strip().startswith("-->") or
+                             "[OK]" in baris or "[TIDAK OK]" in baris or
+                             "AMAN" in baris or "[DIABAIKAN]" in baris)
+                p3 = doc.add_paragraph()
+                p3.paragraph_format.space_before = Pt(0)
+                p3.paragraph_format.space_after  = Pt(0)
+                p3.paragraph_format.left_indent  = Cm(0.5)
+                r3 = p3.add_run(baris if baris.strip() else "")
+                r3.font.name = "Courier New"; r3.font.size = Pt(9.5)
+                if is_result:
+                    r3.bold = True
+                    r3.font.color.rgb = RGBColor(*ok_col)
+            par(space_after=4)
 
-    # === Judul ===
-    par("LAPORAN PERHITUNGAN STRUKTUR", bold=True, size=14,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2, color=(0x1A, 0x3C, 0x5E))
-    par("Evaluasi Kapasitas Lentur & Geser Balok Beton Bertulang", size=12,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
-    par("(Tulangan Rangkap - Strain Compatibility)", size=10,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2,
-        color=(0x55, 0x55, 0x55), italic=True)
-    par("Referensi  :  SNI 2847:2019 (ACI 318-14)", size=10,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2,
-        color=(0x55, 0x55, 0x55), italic=True)
-    par(f"Proyek     :  {nama_proyek}", size=10,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2,
-        color=(0x55, 0x55, 0x55), italic=True)
     if timestamp_str is None:
         timestamp_str = datetime.datetime.now().strftime('%d %B %Y  %H:%M')
-    par(f"Tanggal    :  {timestamp_str}", size=10,
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10,
-        color=(0x55, 0x55, 0x55), italic=True)
-    garis(); par(space_after=6)
+
+    # Header
+    judul_utama("LAPORAN PERHITUNGAN STRUKTUR")
+    judul_utama("Evaluasi Kapasitas Lentur, Geser & Torsi Balok Beton Bertulang")
+    par("(Tulangan Rangkap - Strain Compatibility)",
+        italic=True, size=9, align=WD_ALIGN_PARAGRAPH.CENTER, color=(0x55, 0x55, 0x55))
+    par("Referensi: SNI 2847:2019 (ACI 318-14)",
+        italic=True, size=9, align=WD_ALIGN_PARAGRAPH.CENTER, color=(0x55, 0x55, 0x55))
+    par(f"Proyek: {nama_proyek}   |   Tanggal: {timestamp_str}",
+        size=9, align=WD_ALIGN_PARAGRAPH.CENTER, color=(0x33, 0x33, 0x33), space_after=8)
+    par(space_after=4)
 
     # =========== A. DATA INPUT ===========
     subjudul("A.  DATA INPUT PENAMPANG")
+    par(f"Proyek    : {nama_proyek}", size=10, indent=0.5, space_after=2)
+    par(f"Tanggal   : {timestamp_str}", size=10, indent=0.5, space_after=6)
 
-    rows = [
-        ("Mu",   f"{Mu:.2f} kN.m",  "Momen rencana"),
-        ("fc",   f"{fc:.1f} MPa",   "Kuat tekan beton"),
-        ("fy",   f"{fy:.0f} MPa",   "Kuat leleh tulangan lentur"),
-        ("b",    f"{b:.0f} mm",     "Lebar balok"),
-        ("h",    f"{h:.0f} mm",     "Tinggi total balok"),
-        ("cc",   f"{cc_sel:.0f} mm","Tebal selimut bersih"),
-        ("ds",   f"{ds:.0f} mm",    "Diameter sengkang"),
-    ]
-    if geser_inputs is not None:
-        rows.extend([
-            ("Vu",     f"{geser_inputs['Vu']:.2f} kN",
-             "Gaya geser ultimit"),
-            ("fyt",    f"{geser_inputs['fyt']:.0f} MPa",
-             "Kuat leleh tulangan sengkang"),
-            ("s",      f"{geser_inputs['s_seng']:.0f} mm",
-             "Jarak sengkang terpasang"),
-            ("n_kaki", f"{geser_inputs['n_kaki']:d}",
-             "Jumlah kaki sengkang"),
-        ])
-    for simb, nilai, ket in rows:
+    # Material
+    par("Material:", bold=True, size=10, indent=0.5, space_after=2)
+    for simb, nilai in [
+        ("f'c", f"{fc:.1f} MPa"), ("fy", f"{fy:.0f} MPa"),
+        ("fyt", f"{geser_inputs['fyt']:.0f} MPa" if geser_inputs else "-"),
+    ]:
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
-        p.paragraph_format.left_indent  = Cm(0.5)
-        r1 = p.add_run(f"{simb:<6}"); r1.bold = True
-        r1.font.size = Pt(10); r1.font.name = "Courier New"
-        r2 = p.add_run(f"  =  {nilai:<18}  ({ket})")
-        r2.font.size = Pt(10); r2.font.name = "Courier New"
+        p.paragraph_format.left_indent  = Cm(1.0)
+        r = p.add_run(f"{simb:<6} = {nilai}")
+        r.font.size = Pt(10); r.font.name = "Courier New"
 
-    par(space_after=4)
-    par("Tulangan TARIK (bawah):", bold=True, size=10, indent=0.5, space_after=2)
-    if lapis_tarik:
-        for L in lapis_tarik:
-            p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
-            p.paragraph_format.left_indent = Cm(1.0)
-            r = p.add_run(f"Lapis-{L['no']} : {L['n']} D{int(L['db'])}  "
-                          f"As = {L['As']:.1f} mm2   y = {L['y']:.1f} mm")
-            r.font.size = Pt(10); r.font.name = "Courier New"
+    par("Geometri:", bold=True, size=10, indent=0.5, space_after=2)
+    for simb, nilai in [
+        ("b",  f"{b:.0f} mm"), ("h",  f"{h:.0f} mm"),
+        ("cc", f"{cc_sel:.0f} mm"), ("ds", f"{ds:.0f} mm"),
+    ]:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.left_indent  = Cm(1.0)
+        r = p.add_run(f"{simb:<6} = {nilai}")
+        r.font.size = Pt(10); r.font.name = "Courier New"
+
+    par("Gaya Dalam:", bold=True, size=10, indent=0.5, space_after=2)
+    gd_items = [("Mu", f"{R['Mu']:.2f} kN.m")]
+    if G is not None: gd_items.append(("Vu", f"{G['Vu']:.2f} kN"))
+    if Tor is not None: gd_items.append(("Tu", f"{Tor['Tu']:.2f} kN.m"))
+    for simb, nilai in gd_items:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.left_indent  = Cm(1.0)
+        r = p.add_run(f"{simb:<6} = {nilai}")
+        r.font.size = Pt(10); r.font.name = "Courier New"
+
+    par("Tulangan TARIK:", bold=True, size=10, indent=0.5, space_after=2)
+    for L in lapis_tarik:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.left_indent  = Cm(1.0)
+        r = p.add_run(f"Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
+                      f"As = {L['As']:.1f} mm2   y = {L['y']:.1f} mm")
+        r.font.size = Pt(10); r.font.name = "Courier New"
     par(f"  As-total = {R['As_tarik']:.1f} mm2  |  d-aktual = {R['d_tarik']:.2f} mm",
         bold=True, size=10, indent=1.0, space_after=4)
 
-    par("Tulangan TEKAN (atas):", bold=True, size=10, indent=0.5, space_after=2)
+    par("Tulangan TEKAN:", bold=True, size=10, indent=0.5, space_after=2)
     if lapis_tekan:
         for L in lapis_tekan:
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
-            p.paragraph_format.left_indent = Cm(1.0)
-            r = p.add_run(f"Lapis-{L['no']} : {L['n']} D{int(L['db'])}  "
+            p.paragraph_format.left_indent  = Cm(1.0)
+            r = p.add_run(f"Lapis-{L['no']}: {L['n']} D{int(L['db'])}  "
                           f"As' = {L['As']:.1f} mm2   y = {L['y']:.1f} mm")
             r.font.size = Pt(10); r.font.name = "Courier New"
         par(f"  As'-total = {R['As_tekan']:.1f} mm2  |  d'-aktual = {R['d_tekan']:.2f} mm",
@@ -1058,32 +1453,42 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     ]
     if G is not None:
         rangkuman.extend([
-            ("Phi_v",      f"{G['Phi_v']:.2f}",
-             "Faktor reduksi geser"),
-            ("Vc",         f"{G['Vc']:.2f} kN",
-             "Kapasitas geser beton"),
-            ("Vs",         f"{G['Vs_efektif']:.2f} kN",
-             "Kapasitas geser sengkang"),
-            ("Vn",         f"{G['Vn_efektif']:.2f} kN",
-             "Kapasitas geser nominal"),
-            ("Phi.Vn",     f"{G['PhiVn_efektif']:.2f} kN",
-             "Kapasitas geser rencana"),
-            ("Vu",         f"{G['Vu']:.2f} kN",
-             "Geser ultimit"),
-            ("Av_pasang",  f"{G['Av_pasang']:.1f} mm2",
-             "Av sengkang terpasang"),
-            ("Av_min",     f"{G['Av_min']:.1f} mm2",
-             "Av sengkang minimum"),
-            ("D/C-Geser",  f"{G['DC_geser']:.3f}",
-             "Demand-to-Capacity Geser"),
+            ("Phi_v",      f"{G['Phi_v']:.2f}",             "Faktor reduksi geser"),
+            ("Vc",         f"{G['Vc']:.2f} kN",             "Kapasitas geser beton"),
+            ("Vs",         f"{G['Vs_efektif']:.2f} kN",     "Kapasitas geser sengkang"),
+            ("Vn",         f"{G['Vn_efektif']:.2f} kN",     "Kapasitas geser nominal"),
+            ("Phi.Vn",     f"{G['PhiVn_efektif']:.2f} kN",  "Kapasitas geser rencana"),
+            ("Vu",         f"{G['Vu']:.2f} kN",             "Geser ultimit"),
+            ("Av_pasang",  f"{G['Av_pasang']:.1f} mm2",     "Av sengkang terpasang"),
+            ("Av_min",     f"{G['Av_min']:.1f} mm2",        "Av sengkang minimum"),
+            ("D/C-Geser",  f"{G['DC_geser']:.3f}",          "Demand-to-Capacity Geser"),
         ])
+    if Tor is not None and not Tor["abaikan_torsi"]:
+        rangkuman.extend([
+            ("Tth",        f"{Tor['Tth']:.4f} kN.m",        "Batas ambang torsi"),
+            ("Tu",         f"{Tor['Tu']:.3f} kN.m",         "Torsi ultimit"),
+            ("Tu_desain",  f"{Tor['Tu_desain']:.4f} kN.m",  "Tu desain (setelah reduksi)"),
+            ("Phi.Tn",     f"{Tor['PhiTn_cap']:.4f} kN.m",  "Kapasitas torsi rencana"),
+            ("D/C-Torsi",  f"{Tor['DC_torsi']:.3f}",        "Demand-to-Capacity Torsi"),
+            ("At/s",       f"{Tor['At_per_s']:.6f} mm2/mm", "Kebutuhan sengkang torsi"),
+            ("Al_pakai",   f"{Tor['Al_pakai']:.2f} mm2",    "Tul. longitudinal torsi"),
+            ("n_batang",   f"{Tor['n_batang']} D{int(Tor['db_long_torsi'])}", "Batang longitudinal torsi"),
+            ("s_max_torsi",f"{Tor['s_max_torsi']:.1f} mm",  "Spasi maks sengkang torsi"),
+        ])
+    elif Tor is not None and Tor["abaikan_torsi"]:
+        rangkuman.extend([
+            ("Tu",         f"{Tor['Tu']:.3f} kN.m",         "Torsi ultimit"),
+            ("Tth",        f"{Tor['Tth']:.4f} kN.m",        "Batas ambang torsi"),
+            ("D/C-Torsi",  "DIABAIKAN",                      "Tu < Phi_t x Tth"),
+        ])
+
     for simb, nilai, ket in rangkuman:
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
         p.paragraph_format.left_indent  = Cm(0.5)
-        r1 = p.add_run(f"{simb:<12}"); r1.bold = True
+        r1 = p.add_run(f"{simb:<14}"); r1.bold = True
         r1.font.size = Pt(10); r1.font.name = "Courier New"
-        r2 = p.add_run(f"=  {nilai:<22}  {ket}")
+        r2 = p.add_run(f"=  {nilai:<24}  {ket}")
         r2.font.size = Pt(10); r2.font.name = "Courier New"
     par(space_after=6)
 
@@ -1106,6 +1511,15 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
             (f"s_pasang   = {geser_inputs['s_seng']:.0f}  <=  s_max = {G['s_max']:.1f} mm",
              G["ok_spasi"]),
         ])
+    if Tor is not None and not Tor["abaikan_torsi"]:
+        cek_list.extend([
+            (f"D/C-Torsi  = {Tor['DC_torsi']:.3f}  <=  1.000",               Tor["ok_DC_torsi"]),
+            (f"Dimensi penampang (cek geser+torsi)",                           Tor["ok_dimensi"]),
+            (f"Av+2At terpasang  >= Av+2At minimum",                          Tor["ok_Avt_min"]),
+            (f"s_pasang   = {geser_inputs['s_seng']:.0f}  <=  s_max_torsi = {Tor['s_max_torsi']:.1f} mm",
+             Tor["ok_spasi_torsi"]),
+        ])
+
     for teks_k, ok_k in cek_list:
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(3)
@@ -1118,23 +1532,41 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
 
     # Status gabungan
     status_lentur = "AMAN" if R["ok_dc"] else "TIDAK AMAN"
-    if G is not None:
-        status_geser = "AMAN" if G["ok_total"] else "TIDAK AMAN"
+    status_geser  = ("AMAN" if (G is not None and G["ok_total"]) else
+                     ("TIDAK AMAN" if G is not None else "belum dievaluasi"))
+    if Tor is None:
+        status_torsi = "belum dievaluasi"
+        dc_torsi_str = "-"
+        aman_torsi = True
+    elif Tor["abaikan_torsi"]:
+        status_torsi = "DIABAIKAN"
+        dc_torsi_str = f"Tu={Tor['Tu']:.3f} < phi_t x Tth={Tor['phi_Tth']:.3f} kN.m"
+        aman_torsi = True
     else:
-        status_geser = "belum dievaluasi"
-    status_torsi = "belum dievaluasi"
+        status_torsi = "AMAN" if Tor["ok_torsi_total"] else "TIDAK AMAN"
+        dc_torsi_str = f"D/C = {Tor['DC_torsi']:.3f}"
+        aman_torsi = Tor["ok_torsi_total"]
 
-    kes_gabungan = (f"STATUS GABUNGAN  |  "
-                    f"Lentur: {status_lentur}  |  "
-                    f"Geser: {status_geser}  |  "
-                    f"Torsi: {status_torsi}")
+    aman_total = R["ok_dc"] and (G is None or G["ok_total"]) and aman_torsi
 
-    p_kes = doc.add_paragraph()
-    p_kes.paragraph_format.space_before = Pt(6); p_kes.paragraph_format.space_after = Pt(4)
-    r_kes = p_kes.add_run(kes_gabungan); r_kes.bold = True; r_kes.font.size = Pt(10.5)
-    aman_total = (R["ok_dc"] and (G is None or G["ok_total"]))
-    r_kes.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if aman_total
-                            else RGBColor(0xB7, 0x1C, 0x1C))
+    kes_lines = [
+        f"Status Lentur  : {status_lentur}  (D/C = {R['DC']:.3f})",
+        f"Status Geser   : {status_geser}  (D/C = {G['DC_geser']:.3f})" if G else "Status Geser   : belum dievaluasi",
+        f"Status Torsi   : {status_torsi}  ({dc_torsi_str})",
+        "",
+        "KESIMPULAN AKHIR: Penampang " + ("AMAN" if aman_total else "TIDAK AMAN") +
+        " secara LENTUR + GESER + TORSI",
+    ]
+    for ln in kes_lines:
+        p_kes = doc.add_paragraph()
+        p_kes.paragraph_format.space_before = Pt(2); p_kes.paragraph_format.space_after = Pt(2)
+        r_kes = p_kes.add_run(ln)
+        r_kes.bold = True; r_kes.font.size = Pt(10.5); r_kes.font.name = "Calibri"
+        if "AMAN" in ln or "AMAN" == status_torsi:
+            r_kes.font.color.rgb = RGBColor(0x1B, 0x5E, 0x20)
+        if "TIDAK AMAN" in ln:
+            r_kes.font.color.rgb = RGBColor(0xB7, 0x1C, 0x1C)
+    par(space_after=6)
 
     # =========== E. ANALISA GESER ===========
     if G is not None and steps_geser:
@@ -1144,20 +1576,16 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         tulis_steps(steps_geser)
         par(space_after=6)
 
-        # Sub-kesimpulan geser
         if G["ok_total"]:
-            kes_g = (f"KESIMPULAN GESER : AMAN  |  "
-                     f"D/C-Geser = {G['DC_geser']:.3f} <= 1.0  |  "
+            kes_g = (f"KESIMPULAN GESER : AMAN  |  D/C-Geser = {G['DC_geser']:.3f} <= 1.0  |  "
                      f"Av, spasi, dan Vs_max memenuhi syarat.")
             ok_g = True
         elif G["ok_dc"]:
-            kes_g = (f"KESIMPULAN GESER : Kapasitas terpenuhi "
-                     f"(D/C = {G['DC_geser']:.3f}), "
+            kes_g = (f"KESIMPULAN GESER : Kapasitas terpenuhi (D/C = {G['DC_geser']:.3f}), "
                      f"namun ada syarat detailing yang tidak terpenuhi.")
             ok_g = False
         else:
-            kes_g = (f"KESIMPULAN GESER : TIDAK AMAN  |  "
-                     f"D/C-Geser = {G['DC_geser']:.3f} > 1.0  |  "
+            kes_g = (f"KESIMPULAN GESER : TIDAK AMAN  |  D/C-Geser = {G['DC_geser']:.3f} > 1.0  |  "
                      f"Vu = {G['Vu']:.2f} kN > Phi.Vn = {G['PhiVn_efektif']:.2f} kN.")
             ok_g = False
 
@@ -1165,6 +1593,33 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         p_kg.paragraph_format.space_before = Pt(6); p_kg.paragraph_format.space_after = Pt(4)
         r_kg = p_kg.add_run(kes_g); r_kg.bold = True; r_kg.font.size = Pt(10.5)
         r_kg.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if ok_g
+                               else RGBColor(0xB7, 0x1C, 0x1C))
+
+    # =========== F. ANALISA TORSI ===========
+    if Tor is not None and steps_torsi:
+        subjudul("F.  ANALISA PERHITUNGAN - TORSI")
+        par("Urutan perhitungan torsi mengacu pada SNI 2847:2019 Pasal 22.7.",
+            size=10, italic=True, color=(0x55, 0x55, 0x55), space_after=8)
+        tulis_steps(steps_torsi)
+        par(space_after=6)
+
+        if Tor["abaikan_torsi"]:
+            kes_t = (f"KESIMPULAN TORSI : DIABAIKAN  |  "
+                     f"Tu = {Tor['Tu']:.3f} kN.m <= Phi_t x Tth = {Tor['phi_Tth']:.3f} kN.m")
+            ok_t = True
+        elif Tor["ok_torsi_total"]:
+            kes_t = (f"KESIMPULAN TORSI : AMAN  |  D/C-Torsi = {Tor['DC_torsi']:.3f} <= 1.0  |  "
+                     f"Semua syarat torsi terpenuhi.")
+            ok_t = True
+        else:
+            kes_t = (f"KESIMPULAN TORSI : TIDAK AMAN  |  D/C-Torsi = {Tor['DC_torsi']:.3f} > 1.0  |  "
+                     f"Periksa dimensi, sengkang, dan tulangan longitudinal.")
+            ok_t = False
+
+        p_kt = doc.add_paragraph()
+        p_kt.paragraph_format.space_before = Pt(6); p_kt.paragraph_format.space_after = Pt(4)
+        r_kt = p_kt.add_run(kes_t); r_kt.bold = True; r_kt.font.size = Pt(10.5)
+        r_kt.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if ok_t
                                else RGBColor(0xB7, 0x1C, 0x1C))
 
     garis()
@@ -1178,7 +1633,7 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
 
 
 # ============================================================
-# GENERATOR PDF (.pdf)
+# GENERATOR PDF (.pdf) -- UPDATED dengan Torsi
 # ============================================================
 WATERMARK_TEXT = "DIHASILKAN OLEH: LADOSI ENGINEERING"
 BRAND_COLOR    = (26, 60, 94)
@@ -1199,7 +1654,7 @@ class LaporanBalokPDF(FPDF):
         self.line(25, 15, 190, 15)
         self.set_font("Helvetica", "B", 9); self.set_text_color(*BRAND_COLOR)
         self.set_xy(25, 17)
-        self.cell(0, 5, sp("LAPORAN EVALUASI LENTUR & GESER BALOK  |  SNI 2847:2019"),
+        self.cell(0, 5, sp("LAPORAN EVALUASI LENTUR, GESER & TORSI BALOK  |  SNI 2847:2019"),
                   ln=False, align="L")
         self.set_font("Helvetica", "", 8); self.set_text_color(*GRAY)
         self.set_xy(25, 17)
@@ -1252,7 +1707,8 @@ def _tulis_steps_pdf(pdf, steps_, ok_color=OK_COLOR, fail_color=FAIL_COLOR):
         pdf.cell(0, 4, sp(f"[{s['ref']}]"), ln=True); pdf.set_text_color(0, 0, 0)
         for baris in s["isi"].split("\n"):
             is_result = (baris.strip().startswith("-->") or
-                         "[OK]" in baris or "[TIDAK OK]" in baris or "AMAN" in baris)
+                         "[OK]" in baris or "[TIDAK OK]" in baris or
+                         "AMAN" in baris or "[DIABAIKAN]" in baris)
             pdf.mono_line(baris if baris.strip() else "",
                           bold=is_result,
                           color=(ok_color if s["ok"] else fail_color) if is_result else None)
@@ -1262,6 +1718,7 @@ def _tulis_steps_pdf(pdf, steps_, ok_color=OK_COLOR, fail_color=FAIL_COLOR):
 def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
                      R, steps, nama_proyek, png_buf,
                      G=None, steps_geser=None, geser_inputs=None,
+                     Tor=None, steps_torsi=None, torsi_inputs=None,
                      timestamp_str=None):
     pdf = LaporanBalokPDF(nama_proyek)
     pdf.add_page(); pdf.watermark()
@@ -1273,7 +1730,7 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     pdf.set_font("Helvetica", "B", 15); pdf.set_text_color(*BRAND_COLOR); pdf.ln(2)
     pdf.cell(0, 9, sp("LAPORAN PERHITUNGAN STRUKTUR"), ln=True, align="C")
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, sp("Evaluasi Kapasitas Lentur & Geser Balok Beton Bertulang"),
+    pdf.cell(0, 7, sp("Evaluasi Kapasitas Lentur, Geser & Torsi Balok Beton Bertulang"),
              ln=True, align="C")
     pdf.set_font("Helvetica", "I", 9); pdf.set_text_color(*GRAY)
     pdf.cell(0, 5, sp("(Tulangan Rangkap - Strain Compatibility)"), ln=True, align="C")
@@ -1296,20 +1753,22 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     ]
     if geser_inputs is not None:
         rows.extend([
-            ("Vu",     f"{geser_inputs['Vu']:.2f} kN",
-             "Gaya geser ultimit"),
-            ("fyt",    f"{geser_inputs['fyt']:.0f} MPa",
-             "Kuat leleh sengkang"),
-            ("s",      f"{geser_inputs['s_seng']:.0f} mm",
-             "Jarak sengkang"),
-            ("n_kaki", f"{geser_inputs['n_kaki']:d}",
-             "Jumlah kaki sengkang"),
+            ("Vu",     f"{geser_inputs['Vu']:.2f} kN",    "Gaya geser ultimit"),
+            ("fyt",    f"{geser_inputs['fyt']:.0f} MPa",  "Kuat leleh sengkang"),
+            ("s",      f"{geser_inputs['s_seng']:.0f} mm","Jarak sengkang"),
+            ("n_kaki", f"{geser_inputs['n_kaki']:d}",     "Jumlah kaki sengkang"),
+        ])
+    if torsi_inputs is not None:
+        rows.extend([
+            ("Tu",          f"{torsi_inputs['Tu']:.2f} kN.m",    "Momen torsi ultimit"),
+            ("tipe_torsi",  f"{torsi_inputs['tipe_torsi']}",     "Tipe torsi"),
+            ("db_long_torsi",f"D{int(torsi_inputs['db_long_torsi'])} mm","Dia. tul. long. torsi"),
         ])
     for simb, nilai, ket in rows:
         pdf.set_x(28); pdf.set_font("Courier", "B", 9.5)
-        pdf.cell(20, 5, sp(f"{simb:<8}"), ln=False)
+        pdf.cell(22, 5, sp(f"{simb:<10}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
-        pdf.cell(38, 5, sp(f"=  {nilai}"), ln=False)
+        pdf.cell(36, 5, sp(f"=  {nilai}"), ln=False)
         pdf.set_font("Helvetica", "I", 8.5); pdf.set_text_color(*GRAY)
         pdf.cell(0, 5, sp(f"({ket})"), ln=True); pdf.set_text_color(0, 0, 0)
 
@@ -1346,7 +1805,6 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         pdf.cell(0, 4.5, sp("(Tidak ada tulangan tekan)"), ln=True)
         pdf.set_text_color(0, 0, 0)
 
-    # Sisipkan gambar penampang
     pdf.ln(3)
     pdf.set_x(25); pdf.set_font("Helvetica", "B", 9.5); pdf.set_text_color(*BRAND_COLOR)
     pdf.cell(0, 5, sp("Visualisasi Penampang:"), ln=True); pdf.set_text_color(0, 0, 0)
@@ -1366,8 +1824,9 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     if pdf.get_y() > 200:
         pdf.add_page(); pdf.watermark()
     pdf.section_title("C.  RANGKUMAN HASIL")
+
     rangkuman = [
-        ("Beta-1",     f"{R['beta1']:.4f}",        ""),
+        ("Beta-1",     f"{R['beta1']:.4f}",        "Sumbu netral"),
         ("c",          f"{R['c']:.2f} mm",          "Sumbu netral"),
         ("a",          f"{R['a']:.2f} mm",          "Blok tegangan"),
         ("Cc",         f"{R['Cc']/1000:.2f} kN",    "Gaya tekan beton"),
@@ -1385,23 +1844,43 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     ]
     if G is not None:
         rangkuman.extend([
-            ("Phi_v",     f"{G['Phi_v']:.2f}",           "Faktor reduksi geser"),
-            ("Vc",        f"{G['Vc']:.2f} kN",           "Geser beton"),
-            ("Vs",        f"{G['Vs_efektif']:.2f} kN",   "Geser sengkang"),
-            ("Vn",        f"{G['Vn_efektif']:.2f} kN",   "Geser nominal"),
-            ("Phi.Vn",    f"{G['PhiVn_efektif']:.2f} kN","Geser rencana"),
-            ("Vu",        f"{G['Vu']:.2f} kN",           "Geser ultimit"),
-            ("Av_pasang", f"{G['Av_pasang']:.1f} mm2",   "Sengkang terpasang"),
-            ("Av_min",    f"{G['Av_min']:.1f} mm2",      "Sengkang minimum"),
-            ("D/C-Geser", f"{G['DC_geser']:.3f}",        "DC Geser"),
+            ("Phi_v",     f"{G['Phi_v']:.2f}",            "Faktor reduksi geser"),
+            ("Vc",        f"{G['Vc']:.2f} kN",            "Geser beton"),
+            ("Vs",        f"{G['Vs_efektif']:.2f} kN",    "Geser sengkang"),
+            ("Vn",        f"{G['Vn_efektif']:.2f} kN",    "Geser nominal"),
+            ("Phi.Vn",    f"{G['PhiVn_efektif']:.2f} kN", "Geser rencana"),
+            ("Vu",        f"{G['Vu']:.2f} kN",            "Geser ultimit"),
+            ("Av_pasang", f"{G['Av_pasang']:.1f} mm2",    "Sengkang terpasang"),
+            ("Av_min",    f"{G['Av_min']:.1f} mm2",       "Sengkang minimum"),
+            ("D/C-Geser", f"{G['DC_geser']:.3f}",         "DC Geser"),
         ])
+    if Tor is not None and not Tor["abaikan_torsi"]:
+        rangkuman.extend([
+            ("Phi_t",      f"{Tor['Phi_t']:.2f}",               "Faktor reduksi torsi"),
+            ("Tth",        f"{Tor['Tth']:.4f} kN.m",            "Batas ambang torsi"),
+            ("Tu",         f"{Tor['Tu']:.3f} kN.m",             "Torsi ultimit"),
+            ("Tu_desain",  f"{Tor['Tu_desain']:.4f} kN.m",      "Tu desain"),
+            ("Phi.Tn",     f"{Tor['PhiTn_cap']:.4f} kN.m",      "Kapasitas torsi"),
+            ("D/C-Torsi",  f"{Tor['DC_torsi']:.3f}",            "DC Torsi"),
+            ("At/s",       f"{Tor['At_per_s']:.6f} mm2/mm",     "Kebutuhan sengkang torsi"),
+            ("Al_pakai",   f"{Tor['Al_pakai']:.2f} mm2",        "Tul. longitudinal torsi"),
+            ("n_tul_torsi",f"{Tor['n_batang']} D{int(Tor['db_long_torsi'])}", "Batang long. torsi"),
+            ("s_max_torsi",f"{Tor['s_max_torsi']:.1f} mm",      "Spasi maks sengkang torsi"),
+        ])
+    elif Tor is not None and Tor["abaikan_torsi"]:
+        rangkuman.extend([
+            ("Tu",         f"{Tor['Tu']:.3f} kN.m",    "Torsi ultimit"),
+            ("Tth",        f"{Tor['Tth']:.4f} kN.m",   "Batas ambang torsi"),
+            ("D/C-Torsi",  "DIABAIKAN",                 "Tu < phi_t x Tth"),
+        ])
+
     for simb, nilai, ket in rangkuman:
         if pdf.get_y() > 260:
             pdf.add_page(); pdf.watermark()
         pdf.set_x(28); pdf.set_font("Courier", "B", 9.5)
-        pdf.cell(26, 5, sp(f"{simb:<12}"), ln=False)
+        pdf.cell(28, 5, sp(f"{simb:<13}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
-        pdf.cell(40, 5, sp(f"=  {nilai}"), ln=False)
+        pdf.cell(38, 5, sp(f"=  {nilai}"), ln=False)
         if ket:
             pdf.set_font("Helvetica", "I", 8.5); pdf.set_text_color(*GRAY)
             pdf.cell(0, 5, sp(f"({ket})"), ln=True); pdf.set_text_color(0, 0, 0)
@@ -1429,6 +1908,15 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
             (f"s_pasang   = {geser_inputs['s_seng']:.0f}  <=  s_max = {G['s_max']:.1f} mm",
              G["ok_spasi"]),
         ])
+    if Tor is not None and not Tor["abaikan_torsi"]:
+        cek_list.extend([
+            (f"D/C-Torsi  = {Tor['DC_torsi']:.3f}  <=  1.000",               Tor["ok_DC_torsi"]),
+            (f"Cek dimensi penampang (SNI 22.7.7.1)",                          Tor["ok_dimensi"]),
+            (f"Av+2At >= (Av+2At)_min  (SNI 9.6.4.2)",                        Tor["ok_Avt_min"]),
+            (f"s_pasang = {geser_inputs['s_seng']:.0f} <= s_max_torsi = {Tor['s_max_torsi']:.1f} mm",
+             Tor["ok_spasi_torsi"]),
+        ])
+
     for teks_k, ok_k in cek_list:
         if pdf.get_y() > 260:
             pdf.add_page(); pdf.watermark()
@@ -1442,17 +1930,46 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
     status_lentur = "AMAN" if R["ok_dc"] else "TIDAK AMAN"
     status_geser  = ("AMAN" if (G is not None and G["ok_total"])
                      else ("TIDAK AMAN" if G is not None else "belum dievaluasi"))
-    status_torsi  = "belum dievaluasi"
-    aman_total = (R["ok_dc"] and (G is None or G["ok_total"]))
+    if Tor is None:
+        status_torsi = "belum dievaluasi"
+        dc_torsi_str = "-"
+        aman_torsi = True
+    elif Tor["abaikan_torsi"]:
+        status_torsi = "DIABAIKAN"
+        dc_torsi_str = f"Tu={Tor['Tu']:.3f} < phi_t x Tth={Tor['phi_Tth']:.3f} kN.m"
+        aman_torsi = True
+    else:
+        status_torsi = "AMAN" if Tor["ok_torsi_total"] else "TIDAK AMAN"
+        dc_torsi_str = f"D/C = {Tor['DC_torsi']:.3f}"
+        aman_torsi = Tor["ok_torsi_total"]
 
-    kes_gabungan = (f"STATUS GABUNGAN  |  "
-                    f"Lentur: {status_lentur}  |  "
-                    f"Geser: {status_geser}  |  "
-                    f"Torsi: {status_torsi}")
+    aman_total = R["ok_dc"] and (G is None or G["ok_total"]) and aman_torsi
 
-    pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
-    pdf.set_text_color(*(OK_COLOR if aman_total else FAIL_COLOR))
-    pdf.multi_cell(0, 6, sp(kes_gabungan)); pdf.set_text_color(0, 0, 0)
+    kes_lines = [
+        f"Status Lentur  : {status_lentur}  (D/C = {R['DC']:.3f})",
+        (f"Status Geser   : {status_geser}  (D/C = {G['DC_geser']:.3f})"
+         if G else "Status Geser   : belum dievaluasi"),
+        f"Status Torsi   : {status_torsi}  ({dc_torsi_str})",
+        "",
+        ("KESIMPULAN AKHIR: Penampang " +
+         ("AMAN" if aman_total else "TIDAK AMAN") +
+         " secara LENTUR + GESER + TORSI"),
+    ]
+    for ln_t in kes_lines:
+        if not ln_t:
+            pdf.ln(2); continue
+        ok_line = ("AMAN" in ln_t and "TIDAK" not in ln_t)
+        fail_line = "TIDAK AMAN" in ln_t
+        pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
+        if fail_line:
+            pdf.set_text_color(*FAIL_COLOR)
+        elif ok_line:
+            pdf.set_text_color(*OK_COLOR)
+        else:
+            pdf.set_text_color(*GRAY)
+        pdf.multi_cell(0, 6, sp(ln_t))
+        pdf.set_text_color(0, 0, 0)
+    pdf.ln(3)
 
     # =========== E. ANALISA GESER ===========
     if G is not None and steps_geser:
@@ -1461,7 +1978,6 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         pdf.section_title("E.  ANALISA PERHITUNGAN - GESER")
         _tulis_steps_pdf(pdf, steps_geser)
 
-        # Sub-kesimpulan geser
         if G["ok_total"]:
             kes_g = (f"KESIMPULAN GESER : AMAN  |  "
                      f"D/C-Geser = {G['DC_geser']:.3f} <= 1.0  |  "
@@ -1481,6 +1997,30 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         pdf.set_text_color(*(OK_COLOR if ok_g else FAIL_COLOR))
         pdf.multi_cell(0, 6, sp(kes_g)); pdf.set_text_color(0, 0, 0)
 
+    # =========== F. ANALISA TORSI ===========
+    if Tor is not None and steps_torsi:
+        if pdf.get_y() > 220:
+            pdf.add_page(); pdf.watermark()
+        pdf.section_title("F.  ANALISA PERHITUNGAN - TORSI")
+        _tulis_steps_pdf(pdf, steps_torsi)
+
+        if Tor["abaikan_torsi"]:
+            kes_t = (f"KESIMPULAN TORSI : DIABAIKAN  |  "
+                     f"Tu = {Tor['Tu']:.3f} kN.m <= Phi_t x Tth = {Tor['phi_Tth']:.3f} kN.m")
+            ok_t = True
+        elif Tor["ok_torsi_total"]:
+            kes_t = (f"KESIMPULAN TORSI : AMAN  |  D/C-Torsi = {Tor['DC_torsi']:.3f} <= 1.0  |  "
+                     f"Semua syarat torsi terpenuhi.")
+            ok_t = True
+        else:
+            kes_t = (f"KESIMPULAN TORSI : TIDAK AMAN  |  D/C-Torsi = {Tor['DC_torsi']:.3f} > 1.0  |  "
+                     f"Periksa dimensi, sengkang, dan tulangan longitudinal.")
+            ok_t = False
+
+        pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
+        pdf.set_text_color(*(OK_COLOR if ok_t else FAIL_COLOR))
+        pdf.multi_cell(0, 6, sp(kes_t)); pdf.set_text_color(0, 0, 0)
+
     buf = io.BytesIO(); pdf.output(buf); buf.seek(0)
     return buf
 
@@ -1490,20 +2030,20 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
 # ============================================================
 def _init_state():
     defaults = {
-        "balok_hasil":         None,    # hasil lentur (dict R)
-        "balok_steps":         None,    # langkah b1-b10
-        "balok_geser_hasil":   None,    # hasil geser (dict G)
-        "balok_geser_steps":   None,    # langkah b11-b18
-        "balok_geser_inputs":  None,    # snapshot input geser
+        "balok_hasil":         None,
+        "balok_steps":         None,
+        "balok_geser_hasil":   None,
+        "balok_geser_steps":   None,
+        "balok_geser_inputs":  None,
+        "balok_torsi_hasil":   None,    # TAHAP 2
+        "balok_torsi_steps":   None,    # TAHAP 2
+        "balok_torsi_inputs":  None,    # TAHAP 2
         "balok_word":          None,
         "balok_pdf":           None,
         "balok_fig":           None,
         "balok_last_inputs":   {},
         "balok_nama_file":     "",
-        "balok_timestamp":     "",      # display (DD Month YYYY HH:MM)
-        # placeholder TAHAP 2 - Torsi
-        "balok_torsi_hasil":   None,
-        "balok_torsi_steps":   None,
+        "balok_timestamp":     "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1526,7 +2066,7 @@ def _inputs_changed(snap_now):
 # ============================================================
 _init_state()
 
-st.markdown('<p class="main-title">Evaluasi Kapasitas Lentur & Geser Balok Beton Bertulang</p>',
+st.markdown('<p class="main-title">Evaluasi Kapasitas Lentur, Geser & Torsi Balok Beton Bertulang</p>',
             unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-title">Tulangan Rangkap | Strain Compatibility | '
@@ -1552,10 +2092,10 @@ with col_inp:
     Vu = st.number_input("Vu - Gaya geser ultimit (kN)",
                          min_value=0.0, max_value=5000.0, value=80.0,
                          step=5.0, format="%.2f", key="balok_inp_vu")
-    Tu = st.number_input("Tu - Momen torsi ultimit (kN.m) [belum aktif]",
-                         min_value=0.0, value=0.0, step=1.0, format="%.2f",
-                         key="balok_inp_tu", disabled=True,
-                         help="Akan digunakan pada modul Torsi (sesi berikutnya)")
+    Tu = st.number_input("Tu - Momen torsi ultimit (kN.m)",
+                         min_value=0.0, max_value=2000.0, value=0.0,
+                         step=1.0, format="%.2f", key="balok_inp_tu",
+                         help="Isi 0 jika tidak ada torsi. Evaluasi akan otomatis berjalan.")
 
     st.markdown('<div class="group-hdr">Material</div>', unsafe_allow_html=True)
     fc = st.number_input("f'c - Kuat tekan beton (MPa)",
@@ -1596,6 +2136,23 @@ with col_inp:
                                  step=1, key="balok_inp_nkaki",
                                  help="Default 2 kaki. Untuk balok lebar bisa 4 kaki.")
 
+    st.markdown('<div class="group-hdr">Input Torsi Tambahan</div>', unsafe_allow_html=True)
+    tipe_torsi = st.radio(
+        "Tipe Torsi",
+        options=["Equilibrium", "Compatibility"],
+        index=0,
+        key="balok_inp_tipe_torsi",
+        help="Equilibrium: tidak boleh redistribusi. Compatibility: boleh direduksi ke Phi.Tcr.",
+        horizontal=True,
+    )
+    db_long_torsi = st.selectbox(
+        "Diameter tul. longitudinal torsi (mm)",
+        options=[10, 13, 16, 19],
+        index=1,
+        key="balok_inp_db_long_torsi",
+        help="Diameter tulangan longitudinal tambahan untuk menahan torsi.",
+    )
+
     st.markdown('<div class="group-hdr">Tulangan TARIK (bawah)</div>', unsafe_allow_html=True)
     st.caption("Lapis 1 = paling bawah, Lapis 2 = di atas Lapis 1 (spasi bersih 25 mm)")
     ct1, ct2 = st.columns(2)
@@ -1625,7 +2182,7 @@ with col_inp:
                              index=3, key="balok_inp_dbc2")
 
     st.markdown("")
-    tombol = st.button("HITUNG EVALUASI LENTUR & GESER",
+    tombol = st.button("HITUNG EVALUASI LENTUR, GESER & TORSI",
                        use_container_width=True, type="primary",
                        key="balok_btn_hitung")
 
@@ -1643,6 +2200,7 @@ with col_inp:
         | D32 | 804.2 | 1608 | 2413 | 3217 | 4021 | 4825 |
         """)
 
+
 # ============================================================
 # PROSES HITUNG
 # ============================================================
@@ -1657,14 +2215,15 @@ if tombol:
     if Vu < 0:
         st.error("Vu tidak boleh negatif!")
         valid = False
+    if Tu < 0:
+        st.error("Tu tidak boleh negatif!")
+        valid = False
 
     if valid:
-        # Timestamp
         now = datetime.datetime.now()
         ts_file    = now.strftime("%Y%m%d_%H%M")
         ts_display = now.strftime("%d %B %Y  %H:%M")
 
-        # Hitung lapisan
         lapis_tarik, d_tarik, As_tarik = hitung_lapis_tarik(
             h, cc_sel, ds_dia, n_t1, db_t1, n_t2, db_t2, spasi=25.0)
         lapis_tekan, d_tekan, As_tekan = hitung_lapis_tekan(
@@ -1691,53 +2250,86 @@ if tombol:
             geser_inputs = dict(Vu=Vu, fyt=fyt, s_seng=s_seng,
                                 n_kaki=int(n_kaki))
 
-            # Gambar penampang
+            # === TORSI === (sequential: ambil d, Vc, Vu dari hasil Lentur & Geser)
+            Tor = hitung_torsi(
+                fc=fc, fy_long=fy, fyt=fyt,
+                b=b, h=h, cc_sel=cc_sel, ds=ds_dia, s_seng=s_seng,
+                Tu=Tu, Vu=Vu, Vc=G["Vc"], d_aktual=d_tarik,
+                Av_pasang_geser=G["Av_pasang"],
+                tipe_torsi=tipe_torsi, db_long_torsi=float(db_long_torsi),
+                lambda_=1.0,
+            )
+            steps_torsi = buat_steps_torsi(
+                fc, fyt, fy, b, h, cc_sel, ds_dia, s_seng,
+                Tu, Vu, d_tarik, Tor
+            )
+            torsi_inputs = dict(
+                Tu=Tu, tipe_torsi=tipe_torsi,
+                db_long_torsi=float(db_long_torsi)
+            )
+
+            # Gambar penampang (dengan Aoh jika ada torsi aktif)
             fig = gambar_penampang(b, h, cc_sel, ds_dia,
-                                   lapis_tarik, lapis_tekan, c=R["c"])
+                                   lapis_tarik, lapis_tekan, c=R["c"],
+                                   torsi_data=Tor)
             png_buf = fig_to_png_bytes(fig)
 
-            w_buf = create_word_balok(fc, fy, b, h, cc_sel, ds_dia, Mu,
-                                      lapis_tarik, lapis_tekan,
-                                      R, steps, nama_proyek, png_buf,
-                                      G=G, steps_geser=steps_geser,
-                                      geser_inputs=geser_inputs,
-                                      timestamp_str=ts_display)
+            w_buf = create_word_balok(
+                fc, fy, b, h, cc_sel, ds_dia, Mu,
+                lapis_tarik, lapis_tekan,
+                R, steps, nama_proyek, png_buf,
+                G=G, steps_geser=steps_geser, geser_inputs=geser_inputs,
+                Tor=Tor, steps_torsi=steps_torsi, torsi_inputs=torsi_inputs,
+                timestamp_str=ts_display,
+            )
             png_buf.seek(0)
-            p_buf = create_pdf_balok(fc, fy, b, h, cc_sel, ds_dia, Mu,
-                                     lapis_tarik, lapis_tekan,
-                                     R, steps, nama_proyek, png_buf,
-                                     G=G, steps_geser=steps_geser,
-                                     geser_inputs=geser_inputs,
-                                     timestamp_str=ts_display)
+            p_buf = create_pdf_balok(
+                fc, fy, b, h, cc_sel, ds_dia, Mu,
+                lapis_tarik, lapis_tekan,
+                R, steps, nama_proyek, png_buf,
+                G=G, steps_geser=steps_geser, geser_inputs=geser_inputs,
+                Tor=Tor, steps_torsi=steps_torsi, torsi_inputs=torsi_inputs,
+                timestamp_str=ts_display,
+            )
 
-            snap = dict(nama_proyek=nama_proyek,
-                        Mu=Mu, Vu=Vu, Tu=Tu,
-                        fc=fc, fy=fy, fyt=fyt,
-                        b=b, h=h, cc=cc_sel, ds=ds_dia,
-                        s_seng=s_seng, n_kaki=int(n_kaki),
-                        n_t1=n_t1, db_t1=db_t1, n_t2=n_t2, db_t2=db_t2,
-                        n_c1=n_c1, db_c1=db_c1, n_c2=n_c2, db_c2=db_c2)
+            snap = dict(
+                nama_proyek=nama_proyek,
+                Mu=Mu, Vu=Vu, Tu=Tu,
+                fc=fc, fy=fy, fyt=fyt,
+                b=b, h=h, cc=cc_sel, ds=ds_dia,
+                s_seng=s_seng, n_kaki=int(n_kaki),
+                tipe_torsi=tipe_torsi, db_long_torsi=float(db_long_torsi),
+                n_t1=n_t1, db_t1=db_t1, n_t2=n_t2, db_t2=db_t2,
+                n_c1=n_c1, db_c1=db_c1, n_c2=n_c2, db_c2=db_c2,
+            )
 
             st.session_state.balok_hasil        = R
             st.session_state.balok_steps        = steps
             st.session_state.balok_geser_hasil  = G
             st.session_state.balok_geser_steps  = steps_geser
             st.session_state.balok_geser_inputs = geser_inputs
+            st.session_state.balok_torsi_hasil  = Tor
+            st.session_state.balok_torsi_steps  = steps_torsi
+            st.session_state.balok_torsi_inputs = torsi_inputs
             st.session_state.balok_word         = w_buf.getvalue()
             st.session_state.balok_pdf          = p_buf.getvalue()
             st.session_state.balok_fig          = fig
             st.session_state.balok_last_inputs  = snap
             st.session_state.balok_timestamp    = ts_display
+
+            # Format nama file: fc, Mu, Vu, Tu
             st.session_state.balok_nama_file    = (
-                f"Laporan_Lentur_Balok_fc{int(fc)}_Mu{int(Mu)}_{ts_file}"
+                f"Laporan_Lentur_Geser_Torsi_fc{int(fc)}_Mu{int(Mu)}"
+                f"_Vu{int(Vu)}_Tu{int(Tu)}_{ts_file}"
             )
+
 
 # ============================================================
 # UI - HASIL
 # ============================================================
 with col_out:
     if st.session_state.balok_hasil is None:
-        st.info("Isi data di panel kiri, lalu klik HITUNG EVALUASI LENTUR & GESER")
+        st.info("Isi data di panel kiri, lalu klik HITUNG EVALUASI LENTUR, GESER & TORSI")
         st.markdown("""
         **Yang akan dihitung:**
 
@@ -1763,28 +2355,43 @@ with col_out:
         - **b17.** Vs aktual & Phi.Vn
         - **b18.** D/C Ratio Geser
 
-        **TORSI:** akan ditambahkan pada sesi berikutnya.
+        **TORSI (SNI 2847:2019 Pasal 22.7):**
+        - **b19.** Properti penampang torsi (Acp, pcp, Aoh, ph, Ao)
+        - **b20.** Faktor reduksi Phi_t
+        - **b21.** Batas ambang torsi (Tth)
+        - **b22.** Klasifikasi torsi & Tu desain
+        - **b23.** Cek dimensi penampang (geser + torsi)
+        - **b24.** Tulangan sengkang torsi (At/s)
+        - **b25.** Sengkang gabungan geser + torsi (Av+2At)
+        - **b26.** Spasi maksimum & kontrol
+        - **b27.** Tulangan longitudinal torsi (Al)
+        - **b28.** D/C Torsi & kesimpulan
 
         **Output tersedia dalam dua format:**
         - Word (.docx) - format natural, bisa diedit
         - PDF (.pdf) - formal + watermark LADOSI ENGINEERING
         """)
     else:
-        R     = st.session_state.balok_hasil
-        steps = st.session_state.balok_steps
-        G     = st.session_state.balok_geser_hasil
-        steps_geser  = st.session_state.balok_geser_steps
-        geser_inputs = st.session_state.balok_geser_inputs
-        fig   = st.session_state.balok_fig
+        R           = st.session_state.balok_hasil
+        steps       = st.session_state.balok_steps
+        G           = st.session_state.balok_geser_hasil
+        steps_geser = st.session_state.balok_geser_steps
+        geser_inputs= st.session_state.balok_geser_inputs
+        Tor         = st.session_state.balok_torsi_hasil
+        steps_torsi = st.session_state.balok_torsi_steps
+        fig         = st.session_state.balok_fig
 
         # Soft warning jika input berubah
-        snap_now = dict(nama_proyek=nama_proyek,
-                        Mu=Mu, Vu=Vu, Tu=Tu,
-                        fc=fc, fy=fy, fyt=fyt,
-                        b=b, h=h, cc=cc_sel, ds=ds_dia,
-                        s_seng=s_seng, n_kaki=int(n_kaki),
-                        n_t1=n_t1, db_t1=db_t1, n_t2=n_t2, db_t2=db_t2,
-                        n_c1=n_c1, db_c1=db_c1, n_c2=n_c2, db_c2=db_c2)
+        snap_now = dict(
+            nama_proyek=nama_proyek,
+            Mu=Mu, Vu=Vu, Tu=Tu,
+            fc=fc, fy=fy, fyt=fyt,
+            b=b, h=h, cc=cc_sel, ds=ds_dia,
+            s_seng=s_seng, n_kaki=int(n_kaki),
+            tipe_torsi=tipe_torsi, db_long_torsi=float(db_long_torsi),
+            n_t1=n_t1, db_t1=db_t1, n_t2=n_t2, db_t2=db_t2,
+            n_c1=n_c1, db_c1=db_c1, n_c2=n_c2, db_c2=db_c2,
+        )
         if _inputs_changed(snap_now):
             st.warning(
                 "Perhatian: Data input telah diubah. "
@@ -1792,7 +2399,7 @@ with col_out:
                 "data perhitungan sebelumnya. Klik HITUNG kembali untuk update."
             )
 
-        # ---- Metrik Utama ----
+        # ---- Metrik Utama - Baris 1: Lentur ----
         st.markdown("### Hasil Utama - Lentur")
         m1, m2, m3, m4 = st.columns(4)
         for col, lbl, val, unt in [
@@ -1810,6 +2417,7 @@ with col_out:
                     f'</div>', unsafe_allow_html=True)
         st.markdown("")
 
+        # ---- Metrik Utama - Baris 2: Geser ----
         st.markdown("### Hasil Utama - Geser")
         g1, g2, g3, g4 = st.columns(4)
         for col, lbl, val, unt in [
@@ -1827,7 +2435,35 @@ with col_out:
                     f'</div>', unsafe_allow_html=True)
         st.markdown("")
 
-        # ---- Status D/C Lentur ----
+        # ---- Metrik Utama - Baris 3: Torsi ----
+        st.markdown("### Hasil Utama - Torsi")
+        t1, t2, t3, t4 = st.columns(4)
+        if Tor is not None and not Tor["abaikan_torsi"]:
+            tor_metrics = [
+                (t1, "Phi.Tn (Kapasitas)", f"{Tor['PhiTn_cap']:.3f}", "kN.m"),
+                (t2, "Tu (Demand)",         f"{Tor['Tu_desain']:.3f}", "kN.m"),
+                (t3, "D/C Torsi",           f"{Tor['DC_torsi']:.3f}",  "-"),
+                (t4, "Al perlu",            f"{Tor['Al_pakai']:.1f}",  "mm2"),
+            ]
+        else:
+            dc_str = "DIABAIKAN" if (Tor and Tor["abaikan_torsi"]) else "-"
+            tor_metrics = [
+                (t1, "Phi.Tn (Kapasitas)", "-",       "kN.m"),
+                (t2, "Tu (Demand)",         f"{Tu:.3f}", "kN.m"),
+                (t3, "D/C Torsi",           dc_str,    "-"),
+                (t4, "Al perlu",            "-",        "mm2"),
+            ]
+        for col, lbl, val, unt in tor_metrics:
+            with col:
+                st.markdown(
+                    f'<div class="metric-card">'
+                    f'<div class="metric-lbl">{lbl}</div>'
+                    f'<div class="metric-val">{val}</div>'
+                    f'<div class="metric-unt">{unt}</div>'
+                    f'</div>', unsafe_allow_html=True)
+        st.markdown("")
+
+        # ---- Banner Status Lentur ----
         if R["ok_dc"] and R["et"] >= 0.005 and R["ok_rho_min"] and R["ok_rho_max"]:
             st.markdown(
                 f'<div class="result-ok">[OK] LENTUR AMAN - D/C = {R["DC"]:.3f} <= 1.0 | '
@@ -1835,8 +2471,7 @@ with col_out:
                 unsafe_allow_html=True)
         elif R["ok_dc"]:
             catatan = []
-            if R["et"] < 0.005 and R["et"] >= 0.004:
-                catatan.append("zona transisi")
+            if R["et"] < 0.005 and R["et"] >= 0.004: catatan.append("zona transisi")
             if not R["ok_rho_min"]: catatan.append("Rho < Rho-min")
             if not R["ok_rho_max"]: catatan.append("Rho > Rho-max")
             if not R["ok_et"]:      catatan.append("et < 0.004")
@@ -1848,11 +2483,10 @@ with col_out:
         else:
             st.markdown(
                 f'<div class="result-fail">[X] LENTUR TIDAK AMAN - D/C = {R["DC"]:.3f} > 1.0 | '
-                f'Mu = {R["Mu"]:.2f} kN.m > Phi.Mn = {R["phiMn"]:.2f} kN.m | '
-                f'Penampang/tulangan harus diperbesar</div>',
+                f'Mu = {R["Mu"]:.2f} kN.m > Phi.Mn = {R["phiMn"]:.2f} kN.m</div>',
                 unsafe_allow_html=True)
 
-        # ---- Status D/C Geser ----
+        # ---- Banner Status Geser ----
         if G["ok_total"]:
             st.markdown(
                 f'<div class="result-ok">[OK] GESER AMAN - D/C = {G["DC_geser"]:.3f} <= 1.0 | '
@@ -1872,15 +2506,47 @@ with col_out:
             st.markdown(
                 f'<div class="result-fail">[X] GESER TIDAK AMAN - '
                 f'D/C = {G["DC_geser"]:.3f} > 1.0 | '
-                f'Vu = {G["Vu"]:.2f} kN > Phi.Vn = {G["PhiVn_efektif"]:.2f} kN | '
-                f'Rapatkan sengkang / tambah kaki / perbesar penampang</div>',
+                f'Vu = {G["Vu"]:.2f} kN > Phi.Vn = {G["PhiVn_efektif"]:.2f} kN</div>',
                 unsafe_allow_html=True)
 
-        # ---- Status gabungan ----
+        # ---- Banner Status Torsi ----
+        if Tor is not None and Tor["abaikan_torsi"]:
+            st.markdown(
+                f'<div class="result-ok">[DIABAIKAN] TORSI - '
+                f'Tu = {Tor["Tu"]:.3f} kN.m <= Phi_t x Tth = {Tor["phi_Tth"]:.3f} kN.m | '
+                f'Efek torsi dapat diabaikan (SNI 22.7.4)</div>',
+                unsafe_allow_html=True)
+        elif Tor is not None and Tor["ok_torsi_total"]:
+            st.markdown(
+                f'<div class="result-ok">[OK] TORSI AMAN - D/C = {Tor["DC_torsi"]:.3f} <= 1.0 | '
+                f'Semua syarat torsi terpenuhi</div>',
+                unsafe_allow_html=True)
+        elif Tor is not None and not Tor["ok_torsi_total"]:
+            prob_t = []
+            if not Tor["ok_dimensi"]:           prob_t.append("Dimensi tidak cukup")
+            if not Tor["ok_sengkang_gabungan"]: prob_t.append("Sengkang perlu diperketat")
+            if not Tor["ok_Avt_min"]:           prob_t.append("Av+2At < minimum")
+            if not Tor["ok_spasi_torsi"]:       prob_t.append(f"s > s_max_torsi ({Tor['s_max_torsi']:.0f} mm)")
+            if not Tor["ok_DC_torsi"]:          prob_t.append(f"D/C = {Tor['DC_torsi']:.3f} > 1.0")
+            note_t = " | ".join(prob_t) if prob_t else "periksa semua kontrol"
+            st.markdown(
+                f'<div class="result-fail">[X] TORSI TIDAK AMAN - {note_t}</div>',
+                unsafe_allow_html=True)
+
+        # ---- Banner Gabungan ----
         status_lentur = "AMAN" if R["ok_dc"] else "TIDAK AMAN"
         status_geser  = "AMAN" if G["ok_total"] else "TIDAK AMAN"
-        status_torsi  = "belum dievaluasi"
-        aman_total = R["ok_dc"] and G["ok_total"]
+        if Tor is None:
+            status_torsi = "belum dievaluasi"
+            aman_torsi   = True
+        elif Tor["abaikan_torsi"]:
+            status_torsi = "DIABAIKAN"
+            aman_torsi   = True
+        else:
+            status_torsi = "AMAN" if Tor["ok_torsi_total"] else "TIDAK AMAN"
+            aman_torsi   = Tor["ok_torsi_total"]
+
+        aman_total = R["ok_dc"] and G["ok_total"] and aman_torsi
         css_cls = "result-ok" if aman_total else "result-fail"
         st.markdown(
             f'<div class="{css_cls}">STATUS GABUNGAN | '
@@ -1920,7 +2586,7 @@ with col_out:
             **Gaya Dalam:**
             - Mu = {Mu:.2f} kN.m
             - Vu = {Vu:.2f} kN
-            - Tu = {Tu:.2f} kN.m  *(belum aktif)*
+            - Tu = {Tu:.2f} kN.m  (tipe: {tipe_torsi})
             """)
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
@@ -1941,45 +2607,65 @@ with col_out:
         # ---- C. RANGKUMAN ----
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
         st.markdown("### C.  Rangkuman Hasil")
-        et_s = ("[OK] OK" if R["et"] >= 0.005
-                else "[!] Transisi" if R["et"] >= 0.004 else "[X] Tidak OK")
-        rh_s = "[OK] OK" if (R["ok_rho_min"] and R["ok_rho_max"]) else "[X] Tidak OK"
-        dc_s = "[OK] AMAN" if R["ok_dc"] else "[X] TIDAK AMAN"
+        et_s  = ("[OK] OK" if R["et"] >= 0.005
+                 else "[!] Transisi" if R["et"] >= 0.004 else "[X] Tidak OK")
+        rh_s  = "[OK] OK" if (R["ok_rho_min"] and R["ok_rho_max"]) else "[X] Tidak OK"
+        dc_s  = "[OK] AMAN" if R["ok_dc"] else "[X] TIDAK AMAN"
         dcg_s = "[OK] AMAN" if G["ok_dc"] else "[X] TIDAK AMAN"
         av_s  = "[OK] OK"   if G["ok_Av"]  else "[X] Av < Av_min"
         sp_s  = "[OK] OK"   if G["ok_spasi"] else "[X] s > s_max"
-        vsm_s = "[OK] OK"   if G["ok_Vs_max"] else "[X] Vs > Vs_max"
+
+        params_rangkuman = [
+            # Lentur
+            "Beta-1","c (mm)","a (mm)","Cc (kN)","Cs (kN)","T (kN)",
+            "et","Phi","Rho (%)","Rho-min (%)","Rho-max (%)",
+            "Mn (kN.m)","Phi.Mn (kN.m)","Mu (kN.m)","D/C Lentur",
+            # Geser
+            "Phi_v","Vc (kN)","Vs (kN)","Vn (kN)","Phi.Vn (kN)","Vu (kN)",
+            "Av_pasang (mm2)","Av_min (mm2)","s_max (mm)","D/C Geser",
+        ]
+        nilai_rangkuman = [
+            f"{R['beta1']:.4f}", f"{R['c']:.2f}", f"{R['a']:.2f}",
+            f"{R['Cc']/1000:.2f}", f"{R['Cs']/1000:.2f}", f"{R['T']/1000:.2f}",
+            f"{R['et']:.5f}", f"{R['phi']:.4f}",
+            f"{R['rho']*100:.4f}", f"{R['rho_min']*100:.4f}", f"{R['rho_max']*100:.4f}",
+            f"{R['Mn']:.3f}", f"{R['phiMn']:.3f}", f"{R['Mu']:.3f}", f"{R['DC']:.3f}",
+            f"{G['Phi_v']:.2f}", f"{G['Vc']:.2f}", f"{G['Vs_efektif']:.2f}",
+            f"{G['Vn_efektif']:.2f}", f"{G['PhiVn_efektif']:.2f}", f"{G['Vu']:.2f}",
+            f"{G['Av_pasang']:.1f}", f"{G['Av_min']:.1f}", f"{G['s_max']:.1f}",
+            f"{G['DC_geser']:.3f}",
+        ]
+        status_rangkuman = [
+            "-","-","-","-","-","-",
+            et_s,"-", rh_s,"-","-","-","-","-", dc_s,
+            "-","-","-","-","-","-", av_s, "-", sp_s, dcg_s,
+        ]
+
+        if Tor is not None and not Tor["abaikan_torsi"]:
+            params_rangkuman += [
+                "Phi_t","Tth (kN.m)","Tu (kN.m)","Tu_desain (kN.m)",
+                "Phi.Tn (kN.m)","D/C Torsi",
+                "At/s (mm2/mm)","Al_pakai (mm2)",
+                f"n_batang D{int(Tor['db_long_torsi'])}","s_max_torsi (mm)",
+            ]
+            dct_s = "[OK] AMAN" if Tor["ok_DC_torsi"] else "[X] TIDAK AMAN"
+            nilai_rangkuman += [
+                f"{Tor['Phi_t']:.2f}", f"{Tor['Tth']:.4f}", f"{Tor['Tu']:.3f}",
+                f"{Tor['Tu_desain']:.4f}", f"{Tor['PhiTn_cap']:.4f}",
+                f"{Tor['DC_torsi']:.3f}", f"{Tor['At_per_s']:.6f}",
+                f"{Tor['Al_pakai']:.2f}", f"{Tor['n_batang']}",
+                f"{Tor['s_max_torsi']:.1f}",
+            ]
+            status_rangkuman += ["-","-","-","-","-", dct_s,"-","-","-","-"]
+        elif Tor is not None and Tor["abaikan_torsi"]:
+            params_rangkuman += ["Tu (kN.m)","Tth (kN.m)","D/C Torsi"]
+            nilai_rangkuman  += [f"{Tor['Tu']:.3f}", f"{Tor['Tth']:.4f}", "DIABAIKAN"]
+            status_rangkuman += ["-","-","[DIABAIKAN]"]
 
         df = pd.DataFrame({
-            "Parameter": [
-                # Lentur
-                "Beta-1","c (mm)","a (mm)","Cc (kN)","Cs (kN)","T (kN)",
-                "et","Phi","Rho (%)","Rho-min (%)","Rho-max (%)",
-                "Mn (kN.m)","Phi.Mn (kN.m)","Mu (kN.m)","D/C Lentur",
-                # Geser
-                "Phi_v","Vc (kN)","Vs (kN)","Vn (kN)","Phi.Vn (kN)","Vu (kN)",
-                "Av_pasang (mm2)","Av_min (mm2)","s_max (mm)","D/C Geser",
-            ],
-            "Nilai": [
-                f"{R['beta1']:.4f}", f"{R['c']:.2f}", f"{R['a']:.2f}",
-                f"{R['Cc']/1000:.2f}", f"{R['Cs']/1000:.2f}", f"{R['T']/1000:.2f}",
-                f"{R['et']:.5f}", f"{R['phi']:.4f}",
-                f"{R['rho']*100:.4f}", f"{R['rho_min']*100:.4f}",
-                f"{R['rho_max']*100:.4f}",
-                f"{R['Mn']:.3f}", f"{R['phiMn']:.3f}",
-                f"{R['Mu']:.3f}", f"{R['DC']:.3f}",
-                f"{G['Phi_v']:.2f}", f"{G['Vc']:.2f}",
-                f"{G['Vs_efektif']:.2f}", f"{G['Vn_efektif']:.2f}",
-                f"{G['PhiVn_efektif']:.2f}", f"{G['Vu']:.2f}",
-                f"{G['Av_pasang']:.1f}", f"{G['Av_min']:.1f}",
-                f"{G['s_max']:.1f}", f"{G['DC_geser']:.3f}",
-            ],
-            "Status": [
-                "-","-","-","-","-","-",
-                et_s,"-", rh_s,"-","-","-","-","-", dc_s,
-                "-","-","-","-","-","-",
-                av_s, "-", sp_s, dcg_s,
-            ],
+            "Parameter": params_rangkuman,
+            "Nilai":     nilai_rangkuman,
+            "Status":    status_rangkuman,
         })
         st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -1987,27 +2673,33 @@ with col_out:
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
         st.markdown("### D.  Kesimpulan")
 
+        cek_ringkas_items = [
+            (f"Rho-min ({R['rho_min']*100:.4f}%) <= Rho ({R['rho']*100:.4f}%)", "[OK]" if R["ok_rho_min"] else "[TIDAK OK]"),
+            (f"Rho-max ({R['rho_max']*100:.4f}%) >= Rho ({R['rho']*100:.4f}%)", "[OK]" if R["ok_rho_max"] else "[TIDAK OK]"),
+            (f"et ({R['et']:.5f}) >= 0.004",                                     "[OK]" if R["ok_et"]      else "[TIDAK OK]"),
+            (f"D/C-Lentur ({R['DC']:.3f}) <= 1.000",                             "[OK] AMAN" if R["ok_dc"] else "[X] TIDAK AMAN"),
+            (f"D/C-Geser ({G['DC_geser']:.3f}) <= 1.000",                        "[OK] AMAN" if G["ok_dc"] else "[X] TIDAK AMAN"),
+            (f"Vs_perlu ({G['Vs_perlu']:.2f}) <= Vs_max ({G['Vs_max']:.2f}) kN", "[OK]" if G["ok_Vs_max"] else "[TIDAK OK]"),
+            (f"Av_pasang ({G['Av_pasang']:.1f}) >= Av_min ({G['Av_min']:.1f}) mm2","[OK]" if G["ok_Av"] else "[TIDAK OK]"),
+            (f"s_pasang ({s_seng:.0f}) <= s_max ({G['s_max']:.1f}) mm",           "[OK]" if G["ok_spasi"] else "[TIDAK OK]"),
+        ]
+        if Tor is not None and not Tor["abaikan_torsi"]:
+            cek_ringkas_items.extend([
+                (f"D/C-Torsi ({Tor['DC_torsi']:.3f}) <= 1.000",                  "[OK] AMAN" if Tor["ok_DC_torsi"] else "[X] TIDAK AMAN"),
+                ("Cek dimensi penampang (SNI 22.7.7.1)",                           "[OK]" if Tor["ok_dimensi"] else "[TIDAK OK]"),
+                ("Av+2At terpasang >= Av+2At minimum",                             "[OK]" if Tor["ok_Avt_min"] else "[TIDAK OK]"),
+                (f"s_pasang ({s_seng:.0f}) <= s_max_torsi ({Tor['s_max_torsi']:.1f}) mm",
+                 "[OK]" if Tor["ok_spasi_torsi"] else "[TIDAK OK]"),
+            ])
+        elif Tor is not None and Tor["abaikan_torsi"]:
+            cek_ringkas_items.append(
+                (f"Tu ({Tor['Tu']:.3f}) <= Phi_t x Tth ({Tor['phi_Tth']:.3f}) kN.m",
+                 "[DIABAIKAN]")
+            )
+
         cek_ringkas = pd.DataFrame({
-            "Kontrol": [
-                f"Rho-min ({R['rho_min']*100:.4f}%) <= Rho ({R['rho']*100:.4f}%)",
-                f"Rho-max ({R['rho_max']*100:.4f}%) >= Rho ({R['rho']*100:.4f}%)",
-                f"et ({R['et']:.5f}) >= 0.004",
-                f"D/C-Lentur ({R['DC']:.3f}) <= 1.000",
-                f"D/C-Geser ({G['DC_geser']:.3f}) <= 1.000",
-                f"Vs_perlu ({G['Vs_perlu']:.2f}) <= Vs_max ({G['Vs_max']:.2f}) kN",
-                f"Av_pasang ({G['Av_pasang']:.1f}) >= Av_min ({G['Av_min']:.1f}) mm2",
-                f"s_pasang ({s_seng:.0f}) <= s_max ({G['s_max']:.1f}) mm",
-            ],
-            "Status": [
-                "[OK]" if R["ok_rho_min"] else "[TIDAK OK]",
-                "[OK]" if R["ok_rho_max"] else "[TIDAK OK]",
-                "[OK]" if R["ok_et"]      else "[TIDAK OK]",
-                "[OK] AMAN" if R["ok_dc"] else "[X] TIDAK AMAN",
-                "[OK] AMAN" if G["ok_dc"] else "[X] TIDAK AMAN",
-                "[OK]" if G["ok_Vs_max"] else "[TIDAK OK]",
-                "[OK]" if G["ok_Av"]     else "[TIDAK OK]",
-                "[OK]" if G["ok_spasi"]  else "[TIDAK OK]",
-            ],
+            "Kontrol": [x[0] for x in cek_ringkas_items],
+            "Status":  [x[1] for x in cek_ringkas_items],
         })
         st.dataframe(cek_ringkas, use_container_width=True, hide_index=True)
 
@@ -2025,13 +2717,20 @@ with col_out:
                 f'font-family:monospace">{s["isi"]}</pre></div>',
                 unsafe_allow_html=True)
 
-        # ===== PLACEHOLDER TAHAP 2 - TORSI =====
-        # Section "F. Analisa Perhitungan - Torsi" akan ditambahkan di sini
-        # pada sesi pengembangan berikutnya. Struktur:
-        #   - panggil hitung_torsi(...)
-        #   - panggil buat_steps_torsi(...) -> b19..b25
-        #   - render mirip pola section E di atas
-        # ========================================
+        # ---- F. ANALISA TORSI ----
+        if steps_torsi:
+            st.markdown('<hr class="divider">', unsafe_allow_html=True)
+            st.markdown("### F.  Analisa Perhitungan - Torsi")
+            for s in steps_torsi:
+                warna = "#2e7d32" if s["ok"] else "#c62828"
+                tanda = "[OK]" if s["ok"] else "[X]"
+                st.markdown(
+                    f'<div class="step-box" style="border-left-color:{warna}">'
+                    f'<div class="ref-badge">{s["ref"]}</div><br>'
+                    f'<div class="step-hdr">{s["no"]} {s["judul"]} &nbsp; {tanda}</div>'
+                    f'<pre style="margin:0;font-size:.82rem;white-space:pre-wrap;'
+                    f'font-family:monospace">{s["isi"]}</pre></div>',
+                    unsafe_allow_html=True)
 
         # ---- Download ----
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
