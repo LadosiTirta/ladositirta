@@ -1,8 +1,8 @@
 """
 =============================================================
-HALAMAN 2 — KAPASITAS LENTUR & AKSIAL KOLOM BETON BERTULANG
+HALAMAN 2 - KAPASITAS LENTUR & AKSIAL KOLOM BETON BERTULANG
 Referensi : SNI 2847:2019 (ACI 318-14)
-Asumsi    : Kolom Pendek (Short Column) — tanpa kelangsingan
+Asumsi    : Kolom Pendek (Short Column) - tanpa kelangsingan
 Framework  : Streamlit (multipage)
 Output     : Word (.docx) & PDF (.pdf) + Watermark
 =============================================================
@@ -18,12 +18,12 @@ from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
-# ════════════════════════════════════════════════════════════
+# ============================================================
 # KONFIGURASI HALAMAN
-# ════════════════════════════════════════════════════════════
+# ============================================================
 st.set_page_config(
     page_title="Lentur Kolom Beton | SNI 2847:2019",
-    page_icon="🏛️",
+    page_icon="",
     layout="wide",
 )
 
@@ -55,9 +55,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════
+# ============================================================
 # SANITASI STRING UNTUK PDF (Latin-1 only)
-# ════════════════════════════════════════════════════════════
+# ============================================================
 _UNICODE_MAP = {
     "\u2014": "-",    "\u2013": "-",    "\u2019": "'",   "\u2018": "'",
     "\u201c": '"',    "\u201d": '"',    "\u00b2": "2",   "\u00b3": "3",
@@ -77,10 +77,10 @@ def sp(teks: str) -> str:
     return teks.encode("latin-1", errors="replace").decode("latin-1")
 
 
-# ════════════════════════════════════════════════════════════
-# FUNGSI BANTU — LUAS TULANGAN
-# ════════════════════════════════════════════════════════════
-# Diameter standar (mm) dan luasnya (mm²)
+# ============================================================
+# FUNGSI BANTU - LUAS TULANGAN
+# ============================================================
+# Diameter standar (mm) dan luasnya (mm2)
 DIAM_OPTS = {
     "D10 (78.5 mm2)": (10, 78.54),
     "D13 (132.7 mm2)": (13, 132.73),
@@ -91,12 +91,12 @@ DIAM_OPTS = {
     "D29 (660.5 mm2)": (29, 660.52),
     "D32 (804.2 mm2)": (32, 804.25),
     "D36 (1017.9 mm2)": (36, 1017.88),
-]
+}
 
 
-# ════════════════════════════════════════════════════════════
+# ============================================================
 # FUNGSI PERHITUNGAN KOLOM
-# ════════════════════════════════════════════════════════════
+# ============================================================
 def hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
     """
     Menghitung kapasitas aksial-lentur kolom persegi pendek simetris.
@@ -116,19 +116,19 @@ def hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
     """
     R = {}
 
-    # ── Luas tulangan per batang
+    # -- Luas tulangan per batang
     Ab = math.pi * D_tul**2 / 4
     Ast = n_total * Ab
 
-    # ── Dimensi efektif
+    # -- Dimensi efektif
     d_prime = cover                        # jarak selimut ke pusat tul.
     d       = h - cover                    # tinggi efektif sisi tarik
     Ag      = b * h                        # luas penampang bruto
 
-    # ── Rasio tulangan
+    # -- Rasio tulangan
     rho_g = Ast / Ag
 
-    # ── Beta1
+    # -- Beta1
     if fc <= 28:
         beta1 = 0.85
     elif fc >= 56:
@@ -136,32 +136,32 @@ def hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
     else:
         beta1 = max(0.65, min(0.85, 0.85 - 0.05 * (fc - 28) / 7))
 
-    # ══════════════════════════════════════════════════════
+    # ======================================================
     # KAPASITAS AKSIAL MURNI (Pn0)
     # SNI 2847:2019 Pasal 22.4.2.2
     # Pn0 = 0.85 fc (Ag - Ast) + fy Ast
-    # ══════════════════════════════════════════════════════
+    # ======================================================
     Pn0   = 0.85 * fc * (Ag - Ast) + fy * Ast          # N
     phi_c = 0.65                                         # tied column
     # Batas maksimum aksial SNI (untuk kolom ikat / tied):
     # phi.Pn,max = phi x 0.80 x Pn0
     phiPn_max = phi_c * 0.80 * Pn0                      # N
 
-    # ══════════════════════════════════════════════════════
-    # KAPASITAS LENTUR MURNI (Mn0) — kondisi beban aksial = 0
+    # ======================================================
+    # KAPASITAS LENTUR MURNI (Mn0) - kondisi beban aksial = 0
     # Gunakan pendekatan: tulangan simetris, hitung Mn seperti balok
     # dengan semua tulangan tarik pada satu sisi
-    # ══════════════════════════════════════════════════════
+    # ======================================================
     # Tulangan sisi tarik = n_b batang (sisi bawah/satu sisi lebar)
     # Tulangan sisi tekan = n_b batang (sisi atas/satu sisi lebar)
     # Tulangan sisi kiri & kanan = n_h - 2 batang tiap sisi (sudut sudah terhitung)
     n_sisi_tarik  = n_b                           # tulangan sisi tarik (bawah)
     n_sisi_tekan  = n_b                           # tulangan sisi tekan (atas)
 
-    As_tarik  = n_sisi_tarik * Ab                 # mm²
-    As_tekan  = n_sisi_tekan * Ab                 # mm²
+    As_tarik  = n_sisi_tarik * Ab                 # mm2
+    As_tekan  = n_sisi_tekan * Ab                 # mm2
 
-    # Tinggi blok tegangan — pendekatan As_net
+    # Tinggi blok tegangan - pendekatan As_net
     As_net = As_tarik - As_tekan
     if As_net <= 0:
         As_net = As_tarik   # fallback: abaikan tulangan tekan
@@ -173,10 +173,10 @@ def hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
     Mn0     = As_tarik * fy * (d - a_flex / 2) / 1_000_000   # kN.m
     phiMn0  = phi_f * Mn0
 
-    # ══════════════════════════════════════════════════════
+    # ======================================================
     # TITIK SEIMBANG (BALANCED CONDITION)
     # SNI 2847:2019 Pasal 22.2.2
-    # ══════════════════════════════════════════════════════
+    # ======================================================
     cb   = (600 / (600 + fy)) * d                          # mm
     ab   = beta1 * cb                                      # mm
     # Regangan baja tekan pada balanced
@@ -193,21 +193,21 @@ def hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
     e_Cc   = h / 2 - ab / 2                               # mm
     e_Cs   = h / 2 - d_prime                              # mm
     e_T    = d - h / 2                                    # mm
-    Mb     = (Cc_b * e_Cc + Cs_b * e_Cs - T_b * (-e_T)) / 1000  # kN.m — salah tanda
+    Mb     = (Cc_b * e_Cc + Cs_b * e_Cs - T_b * (-e_T)) / 1000  # kN.m - salah tanda
     Mb     = abs((Cc_b * e_Cc / 1000) + (Cs_b * e_Cs / 1000) + (T_b * e_T / 1000))
 
     phi_b  = 0.65
     phiPb  = phi_b * Pb
     phiMb  = phi_b * Mb
 
-    # ══════════════════════════════════════════════════════
-    # KAPASITAS NOMINAL INTERAKSI — TIGA TITIK KONTROL
-    # ══════════════════════════════════════════════════════
+    # ======================================================
+    # KAPASITAS NOMINAL INTERAKSI - TIGA TITIK KONTROL
+    # ======================================================
     # Titik A : Aksial murni    (Mn=0, Pn=Pn0)
     # Titik B : Balanced        (Pn=Pb, Mn=Mb)
     # Titik C : Lentur murni    (Pn=0,  Mn=Mn0)
 
-    # Rasio tulangan — kontrol
+    # Rasio tulangan - kontrol
     rho_min_col = 0.01
     rho_max_col = 0.08
     ok_rho      = rho_min_col <= rho_g <= rho_max_col
@@ -297,7 +297,7 @@ def buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R):
         ),
         dict(
             no="Langkah 4", ref="SNI 2847:2019 Pasal 22.4.2.2",
-            judul="Kapasitas aksial nominal murni (Pn0) — Beban sentris",
+            judul="Kapasitas aksial nominal murni (Pn0) - Beban sentris",
             isi=(
                 f"Pn0 = 0.85 x fc x (Ag - Ast) + fy x Ast\n"
                 f"    = 0.85 x {fc} x ({Ag:.0f} - {Ast:.2f}) + {fy:.0f} x {Ast:.2f}\n"
@@ -312,7 +312,7 @@ def buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R):
         ),
         dict(
             no="Langkah 5", ref="SNI 2847:2019 Pasal 22.2",
-            judul="Kapasitas lentur murni (Mn0) — Kondisi Pn = 0",
+            judul="Kapasitas lentur murni (Mn0) - Kondisi Pn = 0",
             isi=(
                 f"Tulangan sisi tarik : {R['n_sisi_tarik']} batang (sisi bawah)\n"
                 f"As-tarik = {R['n_sisi_tarik']} x {Ab:.2f} = {R['As_tarik']:.2f} mm2\n"
@@ -372,7 +372,7 @@ def buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R):
         ),
         dict(
             no="Langkah 7", ref="SNI 2847:2019 Pasal 22.4 & 21.2",
-            judul="Diagram Interaksi — Tiga Titik Kontrol",
+            judul="Diagram Interaksi - Tiga Titik Kontrol",
             isi=(
                 f"Titik A (Aksial Murni):\n"
                 f"  Pn  = {R['Pn0']:.2f} kN\n"
@@ -396,9 +396,9 @@ def buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R):
     return steps
 
 
-# ════════════════════════════════════════════════════════════
-# GENERATOR WORD (.docx) — Format natural ketikan
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# GENERATOR WORD (.docx) - Format natural ketikan
+# ============================================================
 def create_word_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
                       R, steps, nama_proyek):
     doc = Document()
@@ -571,9 +571,9 @@ def create_word_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
     return buf
 
 
-# ════════════════════════════════════════════════════════════
-# GENERATOR PDF (.pdf) — Formal + Watermark LADOSI ENGINEERING
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# GENERATOR PDF (.pdf) - Formal + Watermark LADOSI ENGINEERING
+# ============================================================
 WATERMARK_TEXT = "DIHASILKAN OLEH: LADOSI ENGINEERING"
 BRAND_COLOR    = (26, 60, 94)
 OK_COLOR       = (27, 94, 32)
@@ -780,20 +780,20 @@ def create_pdf_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
     return buf
 
 
-# ════════════════════════════════════════════════════════════
-# UI — HEADER
-# ════════════════════════════════════════════════════════════
-st.markdown('<p class="main-title">🏛️ Kapasitas Aksial & Lentur Kolom Beton Bertulang</p>',
+# ============================================================
+# UI - HEADER
+# ============================================================
+st.markdown('<p class="main-title"> Kapasitas Aksial & Lentur Kolom Beton Bertulang</p>',
             unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-title">Referensi: SNI 2847:2019 (setara ACI 318-14) '
-    '| Asumsi: Kolom Pendek (Short Column) — tanpa kelangsingan</p>',
+    '| Asumsi: Kolom Pendek (Short Column) - tanpa kelangsingan</p>',
     unsafe_allow_html=True)
 
 st.markdown(
     '<div class="asumsi-box">'
     '<b>Asumsi & Batasan Modul Ini:</b><br>'
-    '1. Kolom pendek (short column) — efek kelangsingan diabaikan.<br>'
+    '1. Kolom pendek (short column) - efek kelangsingan diabaikan.<br>'
     '2. Penampang persegi, tulangan simetris 4 sisi.<br>'
     '3. Output berupa 3 titik kontrol diagram interaksi: '
     'Aksial Murni (A), Balanced (B), dan Lentur Murni (C).<br>'
@@ -803,13 +803,13 @@ st.markdown(
 
 st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════
-# UI — INPUT
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# UI - INPUT
+# ============================================================
 col_inp, col_out = st.columns([1, 2], gap="large")
 
 with col_inp:
-    st.markdown("### 📋 Data Input Kolom")
+    st.markdown("###  Data Input Kolom")
 
     nama_proyek = st.text_input(
         "Nama Proyek (untuk header laporan)",
@@ -817,18 +817,18 @@ with col_inp:
     )
 
     st.markdown("**Material**")
-    fc = st.number_input("f'c — Kuat tekan beton (MPa)",
+    fc = st.number_input("f'c - Kuat tekan beton (MPa)",
                          min_value=17.0, max_value=100.0, value=30.0, step=1.0, format="%.1f")
-    fy = st.number_input("fy — Kuat leleh tulangan (MPa)",
+    fy = st.number_input("fy - Kuat leleh tulangan (MPa)",
                          min_value=240.0, max_value=600.0, value=400.0, step=10.0, format="%.0f")
 
     st.markdown("**Geometri Penampang**")
     cb2, ch2 = st.columns(2)
     with cb2:
-        b = st.number_input("b (mm) — Lebar", min_value=150.0, max_value=3000.0,
+        b = st.number_input("b (mm) - Lebar", min_value=150.0, max_value=3000.0,
                             value=400.0, step=25.0, format="%.0f")
     with ch2:
-        h = st.number_input("h (mm) — Tinggi", min_value=150.0, max_value=3000.0,
+        h = st.number_input("h (mm) - Tinggi", min_value=150.0, max_value=3000.0,
                             value=400.0, step=25.0, format="%.0f")
     cover = st.number_input(
         "Selimut ke pusat tulangan (mm)",
@@ -836,10 +836,10 @@ with col_inp:
         help="= tebal selimut + diameter sengkang + setengah diameter tulangan longitudinal"
     )
 
-    st.markdown("**Tulangan Longitudinal — Simetris 4 Sisi**")
+    st.markdown("**Tulangan Longitudinal - Simetris 4 Sisi**")
     pilih_d = st.selectbox("Diameter tulangan", options=list(DIAM_OPTS.keys()), index=4)
     D_tul, Ab_per = DIAM_OPTS[pilih_d]
-    st.caption(f"Luas per batang: {Ab_per:.2f} mm²")
+    st.caption(f"Luas per batang: {Ab_per:.2f} mm2")
 
     st.markdown("Jumlah tulangan per sisi:")
     cn_b, cn_h = st.columns(2)
@@ -866,20 +866,20 @@ with col_inp:
     <b>Total tulangan : {n_total} batang</b><br>
     Sisi lebar atas  : {n_b} btg &nbsp;|&nbsp; Sisi lebar bawah : {n_b} btg<br>
     Sisi tinggi kiri : {n_h} btg &nbsp;|&nbsp; Sisi tinggi kanan: {n_h} btg<br>
-    <b>Ast total = {Ast_total:.1f} mm²</b>
+    <b>Ast total = {Ast_total:.1f} mm2</b>
     </div>
     """, unsafe_allow_html=True)
 
     if n_total < 4:
-        st.warning("⚠️ Jumlah tulangan minimum untuk kolom adalah 4 batang.")
+        st.warning(" Jumlah tulangan minimum untuk kolom adalah 4 batang.")
 
     st.markdown("")
-    tombol = st.button("⚡ HITUNG KAPASITAS KOLOM",
+    tombol = st.button(" HITUNG KAPASITAS KOLOM",
                        use_container_width=True, type="primary")
 
-    with st.expander("📌 Tabel luas tulangan (mm²)"):
+    with st.expander(" Tabel luas tulangan (mm2)"):
         st.markdown("""
-        | Ø | 1 | 2 | 3 | 4 | 6 | 8 |
+        | O | 1 | 2 | 3 | 4 | 6 | 8 |
         |---|---|---|---|---|---|---|
         | D13 | 132.7 | 265 | 398 | 531 | 796 | 1061 |
         | D16 | 201.1 | 402 | 603 | 804 | 1206 | 1608 |
@@ -891,22 +891,22 @@ with col_inp:
         """)
 
 
-# ════════════════════════════════════════════════════════════
-# UI — HASIL
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# UI - HASIL
+# ============================================================
 with col_out:
     if tombol:
         # Validasi
         if n_total < 4:
-            st.error("⚠️ Jumlah tulangan minimum adalah 4 batang!"); st.stop()
+            st.error(" Jumlah tulangan minimum adalah 4 batang!"); st.stop()
         if cover >= h / 2 or cover >= b / 2:
-            st.error("⚠️ Selimut terlalu besar relatif terhadap dimensi kolom!"); st.stop()
+            st.error(" Selimut terlalu besar relatif terhadap dimensi kolom!"); st.stop()
 
         R     = hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h)
         steps = buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R)
 
-        # ── Metrik Utama ─────────────────────────────────────
-        st.markdown("### 📊 Hasil Utama")
+        # -- Metrik Utama -------------------------------------
+        st.markdown("###  Hasil Utama")
 
         m1, m2, m3 = st.columns(3)
         for col, lbl, val, unt in [
@@ -937,26 +937,26 @@ with col_out:
                     f'</div>', unsafe_allow_html=True)
         st.markdown("")
 
-        # ── Status Rasio Tulangan ─────────────────────────────
+        # -- Status Rasio Tulangan -----------------------------
         if R["ok_rho"]:
             st.markdown(
-                '<div class="result-ok">✅ RASIO TULANGAN OK — '
+                '<div class="result-ok">[OK] RASIO TULANGAN OK - '
                 f'Rho-g = {R["rho_g"]*100:.4f}% memenuhi syarat 1% s/d 8% (SNI 2847:2019)</div>',
                 unsafe_allow_html=True)
         else:
-            msg = ("Rho-g terlalu kecil (< 1%) — tambah tulangan"
+            msg = ("Rho-g terlalu kecil (< 1%) - tambah tulangan"
                    if R["rho_g"] < 0.01 else
-                   "Rho-g terlalu besar (> 8%) — kurangi tulangan atau perbesar penampang")
+                   "Rho-g terlalu besar (> 8%) - kurangi tulangan atau perbesar penampang")
             st.markdown(
-                f'<div class="result-fail">❌ RASIO TULANGAN TIDAK OK — {msg}</div>',
+                f'<div class="result-fail">[X] RASIO TULANGAN TIDAK OK - {msg}</div>',
                 unsafe_allow_html=True)
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-        # ── Diagram Interaksi (tabel 3 titik) ────────────────
-        st.markdown("### 📈 Titik Kontrol Diagram Interaksi")
+        # -- Diagram Interaksi (tabel 3 titik) ----------------
+        st.markdown("###  Titik Kontrol Diagram Interaksi")
         df_di = pd.DataFrame({
-            "Titik": ["A — Aksial Murni", "B — Balanced", "C — Lentur Murni"],
+            "Titik": ["A - Aksial Murni", "B - Balanced", "C - Lentur Murni"],
             "Pn (kN)":    [f"{R['Pn0']:.2f}", f"{R['Pb']:.2f}", "0"],
             "Mn (kN.m)":  ["0", f"{R['Mb']:.3f}", f"{R['Mn0']:.3f}"],
             "Phi":        [f"{R['phi_c']}", f"{R['phi_b']}", f"{R['phi_f']:.4f}"],
@@ -971,23 +971,23 @@ with col_out:
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-        # ── Langkah Perhitungan ───────────────────────────────
-        st.markdown("### 📐 Urutan Perhitungan")
+        # -- Langkah Perhitungan -------------------------------
+        st.markdown("###  Urutan Perhitungan")
         for s in steps:
             warna = "#2e7d32" if s["ok"] else "#c62828"
-            tanda = "✓" if s["ok"] else "✗"
+            tanda = "v" if s["ok"] else "x"
             st.markdown(
                 f'<div class="step-box" style="border-left-color:{warna}">'
                 f'<div class="ref-badge">{s["ref"]}</div><br>'
-                f'<div class="step-hdr">{s["no"]} — {s["judul"]} &nbsp; {tanda}</div>'
+                f'<div class="step-hdr">{s["no"]} - {s["judul"]} &nbsp; {tanda}</div>'
                 f'<pre style="margin:0;font-size:.82rem;white-space:pre-wrap;'
                 f'font-family:monospace">{s["isi"]}</pre></div>',
                 unsafe_allow_html=True)
 
-        # ── Tabel Rangkuman ───────────────────────────────────
+        # -- Tabel Rangkuman -----------------------------------
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("### 📋 Tabel Rangkuman")
-        rho_s = "✅ OK" if R["ok_rho"] else "❌ Tidak OK"
+        st.markdown("###  Tabel Rangkuman")
+        rho_s = "[OK] OK" if R["ok_rho"] else "[X] Tidak OK"
         df_rng = pd.DataFrame({
             "Parameter": [
                 "Beta-1", "Ag (mm2)", "Ast (mm2)", "Rho-g (%)",
@@ -1010,18 +1010,18 @@ with col_out:
                 f"{R['phiMb']:.3f}",
             ],
             "Status": [
-                "—", "—", "—", rho_s,
-                "—", "—", "—", "—",
-                "—", "—", "—", "—",
+                "-", "-", "-", rho_s,
+                "-", "-", "-", "-",
+                "-", "-", "-", "-",
             ],
         })
         st.dataframe(df_rng, use_container_width=True, hide_index=True)
 
-        # ════════════════════════════════════════════════════
+        # ====================================================
         # TOMBOL DOWNLOAD
-        # ════════════════════════════════════════════════════
+        # ====================================================
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("### 📄 Download Laporan")
+        st.markdown("###  Download Laporan")
 
         nama_base = (f"Laporan_Kolom_fc{int(fc)}_fy{int(fy)}"
                      f"_b{int(b)}x{int(h)}_n{n_total}D{int(D_tul)}")
@@ -1036,7 +1036,7 @@ with col_out:
         dl_w, dl_p = st.columns(2)
         with dl_w:
             st.download_button(
-                label="⬇️  Download Laporan Word (.docx)",
+                label="  Download Laporan Word (.docx)",
                 data=word_buf,
                 file_name=f"{nama_base}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1045,7 +1045,7 @@ with col_out:
             )
         with dl_p:
             st.download_button(
-                label="⬇️  Download Laporan PDF (.pdf)",
+                label="  Download Laporan PDF (.pdf)",
                 data=pdf_buf,
                 file_name=f"{nama_base}.pdf",
                 mime="application/pdf",
@@ -1058,20 +1058,20 @@ with col_out:
         )
 
     else:
-        st.info("👈  Isi data di panel kiri, lalu klik **HITUNG KAPASITAS KOLOM**")
+        st.info("  Isi data di panel kiri, lalu klik **HITUNG KAPASITAS KOLOM**")
         st.markdown("""
         **Yang akan dihitung (Kolom Pendek, Simetris 4 Sisi):**
-        1. Faktor β₁ (blok tegangan Whitney)
+        1. Faktor Beta1 (blok tegangan Whitney)
         2. Data tulangan longitudinal dan Ast
-        3. Rasio tulangan longitudinal ρ-g (kontrol 1%–8%)
+        3. Rasio tulangan longitudinal Rho-g (kontrol 1%-8%)
         4. Kapasitas aksial murni Pn0 dan Phi.Pn,max
         5. Kapasitas lentur murni Mn0 dan Phi.Mn0
         6. Kondisi balanced: Pb, Mb, Phi.Pb, Phi.Mb
         7. Tiga titik kontrol diagram interaksi (P-M)
 
         **Output tersedia dalam dua format:**
-        - 📝 Word (.docx) — format natural, bisa diedit
-        - 📋 PDF (.pdf)  — formal + watermark LADOSI ENGINEERING
+        -  Word (.docx) - format natural, bisa diedit
+        -  PDF (.pdf)  - formal + watermark LADOSI ENGINEERING
         """)
 
 # Footer
