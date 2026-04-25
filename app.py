@@ -472,10 +472,50 @@ FAIL_COLOR     = (183, 28, 28)   # merah
 GRAY           = (120, 120, 120)
 
 
+# ════════════════════════════════════════════════════════════
+# SANITASI STRING UNTUK PDF (fpdf2 hanya mendukung Latin-1)
+# ════════════════════════════════════════════════════════════
+_UNICODE_MAP = {
+    "\u2014": "-",    # em dash —
+    "\u2013": "-",    # en dash –
+    "\u2019": "'",    # right single quote
+    "\u2018": "'",    # left single quote
+    "\u201c": '"',    # left double quote
+    "\u201d": '"',    # right double quote
+    "\u00b2": "2",    # superscript 2 (mm2)
+    "\u00b3": "3",    # superscript 3
+    "\u00b0": " deg", # degree
+    "\u00d7": "x",    # multiplication x
+    "\u2265": ">=",   # >=
+    "\u2264": "<=",   # <=
+    "\u2260": "!=",   # !=
+    "\u221a": "sqrt", # sqrt
+    "\u03c6": "Phi",  # phi
+    "\u03b2": "Beta", # beta
+    "\u03b5": "et",   # epsilon
+    "\u03c1": "Rho",  # rho
+    "\u03bc": "mu",   # mu
+    "\u2022": "-",    # bullet
+    "\u2192": "->",   # arrow right
+    "\u00b7": ".",    # middle dot
+    "\u00e9": "e",    # e acute
+    "\u00e8": "e",    # e grave
+    "\u00e0": "a",    # a grave
+}
+
+def sp(teks: str) -> str:
+    """Sanitasi string agar aman untuk fpdf2 (Latin-1 only)."""
+    if not isinstance(teks, str):
+        teks = str(teks)
+    for ch, repl in _UNICODE_MAP.items():
+        teks = teks.replace(ch, repl)
+    return teks.encode("latin-1", errors="replace").decode("latin-1")
+
+
 class LaporanPDF(FPDF):
     def __init__(self, nama_proyek):
         super().__init__()
-        self.nama_proyek = nama_proyek
+        self.nama_proyek = sp(nama_proyek)  # sanitasi dari awal
         self.set_margins(25, 25, 20)
         self.set_auto_page_break(auto=True, margin=25)
 
@@ -503,7 +543,7 @@ class LaporanPDF(FPDF):
         self.set_font("Helvetica", "I", 7.5)
         self.set_text_color(*GRAY)
         self.cell(0, 6,
-            "Referensi: SNI 2847:2019 | ACI 318-14  —  "
+            "Referensi: SNI 2847:2019 | ACI 318-14 - "
             "Untuk keperluan profesional, verifikasi mandiri tetap diperlukan.",
             align="C")
         self.set_xy(25, self.get_y())
@@ -520,14 +560,14 @@ class LaporanPDF(FPDF):
         y_center = self.h / 2
         with self.rotation(40, x_center, y_center):
             self.set_xy(x_center - 65, y_center - 6)
-            self.cell(130, 12, WATERMARK_TEXT, align="C")
+            self.cell(130, 12, sp(WATERMARK_TEXT), align="C")
         self.set_text_color(0, 0, 0)   # reset
 
     def section_title(self, teks):
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(*BRAND_COLOR)
         self.ln(4)
-        self.cell(0, 7, teks, ln=True)
+        self.cell(0, 7, sp(teks), ln=True)
         self.set_draw_color(*BRAND_COLOR)
         self.set_line_width(0.4)
         self.line(self.get_x(), self.get_y(), 190, self.get_y())
@@ -539,7 +579,7 @@ class LaporanPDF(FPDF):
         if color:
             self.set_text_color(*color)
         self.set_x(28)
-        self.multi_cell(0, 4.5, teks)
+        self.multi_cell(0, 4.5, sp(teks))
         self.set_text_color(0, 0, 0)
 
 
@@ -552,13 +592,13 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(*BRAND_COLOR)
     pdf.ln(2)
-    pdf.cell(0, 9, "LAPORAN PERHITUNGAN STRUKTUR", ln=True, align="C")
+    pdf.cell(0, 9, sp("LAPORAN PERHITUNGAN STRUKTUR"), ln=True, align="C")
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "Kapasitas Lentur Balok Beton Bertulang", ln=True, align="C")
+    pdf.cell(0, 7, sp("Kapasitas Lentur Balok Beton Bertulang"), ln=True, align="C")
     pdf.set_font("Helvetica", "I", 9)
     pdf.set_text_color(*GRAY)
-    pdf.cell(0, 5, f"Referensi: SNI 2847:2019 (ACI 318-14)", ln=True, align="C")
-    pdf.cell(0, 5, f"Proyek: {nama_proyek}   |   Tanggal: {datetime.datetime.now().strftime('%d %B %Y')}",
+    pdf.cell(0, 5, sp(f"Referensi: SNI 2847:2019 (ACI 318-14)"), ln=True, align="C")
+    pdf.cell(0, 5, sp(f"Proyek: {nama_proyek}   |   Tanggal: {datetime.datetime.now().strftime('%d %B %Y')}"),
              ln=True, align="C")
     pdf.ln(6)
     pdf.set_draw_color(*BRAND_COLOR)
@@ -582,12 +622,12 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     for simb, nilai, ket in data_input:
         pdf.set_x(28)
         pdf.set_font("Courier", "B", 9.5)
-        pdf.cell(18, 5, f"{simb:<6}", ln=False)
+        pdf.cell(18, 5, sp(f"{simb:<6}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
-        pdf.cell(35, 5, f"=  {nilai}", ln=False)
+        pdf.cell(35, 5, sp(f"=  {nilai}"), ln=False)
         pdf.set_font("Helvetica", "I", 8.5)
         pdf.set_text_color(*GRAY)
-        pdf.cell(0, 5, f"({ket})", ln=True)
+        pdf.cell(0, 5, sp(f"({ket})"), ln=True)
         pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
@@ -604,13 +644,13 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*BRAND_COLOR)
         pdf.set_x(25)
-        pdf.cell(0, 6, f"{s['no']}  {s['judul']}", ln=True)
+        pdf.cell(0, 6, sp(f"{s['no']}  {s['judul']}"), ln=True)
 
         # Referensi
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(*GRAY)
         pdf.set_x(28)
-        pdf.cell(0, 4, f"[{s['ref']}]", ln=True)
+        pdf.cell(0, 4, sp(f"[{s['ref']}]"), ln=True)
         pdf.set_text_color(0, 0, 0)
 
         # Baris perhitungan
@@ -649,13 +689,13 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     for simb, nilai, ket in rangkuman:
         pdf.set_x(28)
         pdf.set_font("Courier", "B", 9.5)
-        pdf.cell(22, 5, f"{simb:<10}", ln=False)
+        pdf.cell(22, 5, sp(f"{simb:<10}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
-        pdf.cell(38, 5, f"=  {nilai}", ln=False)
+        pdf.cell(38, 5, sp(f"=  {nilai}"), ln=False)
         if ket:
             pdf.set_font("Helvetica", "I", 8.5)
             pdf.set_text_color(*GRAY)
-            pdf.cell(0, 5, f"({ket})", ln=True)
+            pdf.cell(0, 5, sp(f"({ket})"), ln=True)
             pdf.set_text_color(0, 0, 0)
         else:
             pdf.ln()
@@ -677,7 +717,7 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
         pdf.set_x(28)
         pdf.set_font("Courier", "B", 9.5)
         pdf.set_text_color(*(OK_COLOR if ok_k else FAIL_COLOR))
-        pdf.cell(0, 5.5, f"{teks_k}   --> {tanda}", ln=True)
+        pdf.cell(0, 5.5, sp(f"{teks_k}   --> {tanda}"), ln=True)
         pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
@@ -699,7 +739,7 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     pdf.set_x(25)
     pdf.set_font("Helvetica", "B", 10.5)
     pdf.set_text_color(*(OK_COLOR if ok_final else FAIL_COLOR))
-    pdf.multi_cell(0, 6, kes)
+    pdf.multi_cell(0, 6, sp(kes))
     pdf.set_text_color(0, 0, 0)
 
     buf = io.BytesIO()
@@ -930,7 +970,7 @@ st.markdown('<hr class="divider">', unsafe_allow_html=True)
 st.markdown(
     "<p style='text-align:center;font-size:.75rem;color:#aaa'>"
     "Referensi: SNI 2847:2019 | ACI 318-14 | "
-    "Untuk keperluan profesional — verifikasi mandiri tetap diperlukan"
+    "Untuk keperluan profesional - verifikasi mandiri tetap diperlukan"
     "</p>",
     unsafe_allow_html=True,
 )
