@@ -1,9 +1,10 @@
 """
 =============================================================
-APLIKASI WEB — KAPASITAS LENTUR BALOK BETON BERTULANG
+HALAMAN 1 - KAPASITAS LENTUR BALOK BETON BERTULANG
 Referensi : SNI 2847:2019 (ACI 318-14)
-Framework  : Streamlit
-Output     : Word (.docx) & PDF (.pdf)
+Framework  : Streamlit (multipage)
+Output     : Word (.docx) & PDF (.pdf) + Watermark
+Session    : st.session_state untuk persistensi hasil
 =============================================================
 """
 
@@ -17,12 +18,12 @@ from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
-# ════════════════════════════════════════════════════════════
+# ============================================================
 # KONFIGURASI HALAMAN
-# ════════════════════════════════════════════════════════════
+# ============================================================
 st.set_page_config(
     page_title="Lentur Balok Beton | SNI 2847:2019",
-    page_icon="🏗️",
+    page_icon="🏗",
     layout="wide",
 )
 
@@ -52,13 +53,34 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# SANITASI STRING UNTUK PDF (Latin-1 only)
+# ============================================================
+_UNICODE_MAP = {
+    "\u2014": "-",    "\u2013": "-",    "\u2019": "'",   "\u2018": "'",
+    "\u201c": '"',    "\u201d": '"',    "\u00b2": "2",   "\u00b3": "3",
+    "\u00b0": " deg", "\u00d7": "x",   "\u2265": ">=",  "\u2264": "<=",
+    "\u2260": "!=",   "\u221a": "sqrt", "\u03c6": "Phi", "\u03b2": "Beta",
+    "\u03b5": "et",   "\u03c1": "Rho",  "\u03bc": "mu",  "\u2022": "-",
+    "\u2192": "->",   "\u00b7": ".",    "\u00e9": "e",   "\u00e8": "e",
+    "\u00e0": "a",    "\u2550": "=",    "\u2500": "-",
+}
+
+def sp(teks: str) -> str:
+    """Sanitasi string agar aman untuk fpdf2 (Latin-1 only)."""
+    if not isinstance(teks, str):
+        teks = str(teks)
+    for ch, repl in _UNICODE_MAP.items():
+        teks = teks.replace(ch, repl)
+    return teks.encode("latin-1", errors="replace").decode("latin-1")
+
+
+# ============================================================
 # FUNGSI PERHITUNGAN
-# ════════════════════════════════════════════════════════════
-def hitung(fc, fy, b, h, d, As, Asp):
+# ============================================================
+def hitung_balok(fc, fy, b, h, d, As, Asp):
     R = {}
 
-    # beta1
     if fc <= 28:
         beta1 = 0.85
         R["beta1_cara"] = f"fc = {fc} MPa <= 28 MPa  -->  Beta-1 = 0.85"
@@ -114,17 +136,13 @@ def hitung(fc, fy, b, h, d, As, Asp):
     return R
 
 
-def buat_steps(fc, fy, b, h, d, As, Asp, R):
-    """Kembalikan list dict langkah-langkah, dipakai UI & export."""
+def buat_steps_balok(fc, fy, b, h, d, As, Asp, R):
     ok_rho = R["ok_rho_min"] and R["ok_rho_max"]
     return [
         dict(
             no="Langkah 1", ref="SNI 2847:2019 Pasal 22.2.2.4.3",
             judul="Faktor blok tegangan ekivalen (Beta-1)",
-            isi=(
-                f"{R['beta1_cara']}\n"
-                f"  -->  Beta-1 = {R['beta1']:.4f}"
-            ),
+            isi=(f"{R['beta1_cara']}\n  -->  Beta-1 = {R['beta1']:.4f}"),
             ok=True,
         ),
         dict(
@@ -174,7 +192,8 @@ def buat_steps(fc, fy, b, h, d, As, Asp, R):
                 f"Rho-min = max( 0.25 x sqrt(fc)/fy  ,  1.4/fy )\n"
                 f"        = max( {R['rho_mA']:.6f}  ,  {R['rho_mB']:.6f} )\n"
                 f"        = {R['rho_min']:.6f}  =  {R['rho_min']*100:.4f}%\n"
-                f"Kontrol : Rho = {R['rho']*100:.4f}%  {'>=  Rho-min  [OK]' if R['ok_rho_min'] else '<   Rho-min  [TIDAK OK]'}"
+                f"Kontrol : Rho = {R['rho']*100:.4f}%  "
+                f"{'>=  Rho-min  [OK]' if R['ok_rho_min'] else '<   Rho-min  [TIDAK OK]'}"
             ),
             ok=R["ok_rho_min"],
         ),
@@ -187,7 +206,8 @@ def buat_steps(fc, fy, b, h, d, As, Asp, R):
                 f"        = {R['rho_bal']:.6f}  =  {R['rho_bal']*100:.4f}%\n"
                 f"Rho-max = 0.75 x Rho-bal\n"
                 f"        = {R['rho_max']:.6f}  =  {R['rho_max']*100:.4f}%\n"
-                f"Kontrol : Rho = {R['rho']*100:.4f}%  {'<=  Rho-max  [OK]' if R['ok_rho_max'] else '>   Rho-max  [TIDAK OK]'}"
+                f"Kontrol : Rho = {R['rho']*100:.4f}%  "
+                f"{'<=  Rho-max  [OK]' if R['ok_rho_max'] else '>   Rho-max  [TIDAK OK]'}"
             ),
             ok=R["ok_rho_max"],
         ),
@@ -205,10 +225,7 @@ def buat_steps(fc, fy, b, h, d, As, Asp, R):
         dict(
             no="Langkah 9", ref="SNI 2847:2019 Tabel 21.2.2",
             judul="Faktor reduksi kekuatan (Phi)",
-            isi=(
-                f"{R['phi_cara']}\n"
-                f"  -->  Phi = {R['phi']:.4f}"
-            ),
+            isi=(f"{R['phi_cara']}\n  -->  Phi = {R['phi']:.4f}"),
             ok=R["et"] >= 0.004,
         ),
         dict(
@@ -228,22 +245,16 @@ def buat_steps(fc, fy, b, h, d, As, Asp, R):
     ]
 
 
-# ════════════════════════════════════════════════════════════
-# GENERATOR WORD (.docx)  —  format natural seperti diketik
-# ════════════════════════════════════════════════════════════
-def create_word(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
+# ============================================================
+# GENERATOR WORD (.docx)
+# ============================================================
+def create_word_balok(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     doc = Document()
-
-    # Margin A4
     for sec in doc.sections:
-        sec.page_width    = Cm(21)
-        sec.page_height   = Cm(29.7)
-        sec.left_margin   = Cm(3)
-        sec.right_margin  = Cm(2.5)
-        sec.top_margin    = Cm(3)
-        sec.bottom_margin = Cm(2.5)
+        sec.page_width    = Cm(21);  sec.page_height   = Cm(29.7)
+        sec.left_margin   = Cm(3);   sec.right_margin  = Cm(2.5)
+        sec.top_margin    = Cm(3);   sec.bottom_margin = Cm(2.5)
 
-    # Helper: tambah paragraf
     def par(teks="", bold=False, size=11, indent=0, space_after=4,
             align=WD_ALIGN_PARAGRAPH.LEFT, color=None, italic=False, mono=False):
         p = doc.add_paragraph()
@@ -254,39 +265,30 @@ def create_word(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
             p.paragraph_format.left_indent = Cm(indent)
         if teks:
             r = p.add_run(teks)
-            r.bold   = bold
-            r.italic = italic
-            r.font.size = Pt(size)
-            if color:
-                r.font.color.rgb = RGBColor(*color)
-            if mono:
-                r.font.name = "Courier New"
+            r.bold = bold; r.italic = italic; r.font.size = Pt(size)
+            if color:  r.font.color.rgb = RGBColor(*color)
+            if mono:   r.font.name = "Courier New"
         return p
 
     def garis():
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(2)
-        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
         run = p.add_run("_" * 72)
-        run.font.size  = Pt(9)
-        run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        run.font.size = Pt(9); run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
     def subjudul(teks):
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(10)
-        p.paragraph_format.space_after  = Pt(4)
-        r = p.add_run(teks)
-        r.bold = True
-        r.font.size = Pt(11)
+        p.paragraph_format.space_before = Pt(10); p.paragraph_format.space_after = Pt(4)
+        r = p.add_run(teks); r.bold = True; r.font.size = Pt(11)
         r.font.color.rgb = RGBColor(0x1A, 0x3C, 0x5E)
         garis()
 
-    # ─── JUDUL ───────────────────────────────────────────────
+    # Judul
     par("LAPORAN PERHITUNGAN STRUKTUR", bold=True, size=14,
         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2, color=(0x1A, 0x3C, 0x5E))
-    par("Kapasitas Lentur Balok Beton Bertulang", bold=False, size=12,
+    par("Kapasitas Lentur Balok Beton Bertulang", size=12,
         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
-    par(f"Referensi  :  SNI 2847:2019 (ACI 318-14)", size=10,
+    par("Referensi  :  SNI 2847:2019 (ACI 318-14)", size=10,
         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2,
         color=(0x55, 0x55, 0x55), italic=True)
     par(f"Proyek     :  {nama_proyek}", size=10,
@@ -295,386 +297,239 @@ def create_word(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
     par(f"Tanggal    :  {datetime.datetime.now().strftime('%d %B %Y')}", size=10,
         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10,
         color=(0x55, 0x55, 0x55), italic=True)
-    garis()
-    par(space_after=6)
+    garis(); par(space_after=6)
 
-    # ─── 1. DATA INPUT ───────────────────────────────────────
+    # 1. Data Input
     subjudul("1.  DATA INPUT PENAMPANG")
-    data_input = [
-        ("Kuat tekan beton",    "fc",      f"{fc:.1f} MPa"),
-        ("Kuat leleh tulangan", "fy",      f"{fy:.0f} MPa"),
-        ("Lebar balok",         "b",       f"{b:.0f} mm"),
-        ("Tinggi total balok",  "h",       f"{h:.0f} mm"),
-        ("Tinggi efektif",      "d",       f"{d:.0f} mm"),
-        ("Luas tulangan tarik", "As",      f"{As:.0f} mm2"),
-        ("Luas tulangan tekan", "As'",     f"{Asp:.0f} mm2"),
-    ]
-    for nama, simb, nilai in data_input:
+    for simb, nilai, nama in [
+        ("fc",   f"{fc:.1f} MPa",  "Kuat tekan beton"),
+        ("fy",   f"{fy:.0f} MPa",  "Kuat leleh tulangan"),
+        ("b",    f"{b:.0f} mm",    "Lebar balok"),
+        ("h",    f"{h:.0f} mm",    "Tinggi total balok"),
+        ("d",    f"{d:.0f} mm",    "Tinggi efektif"),
+        ("As",   f"{As:.0f} mm2",  "Luas tulangan tarik"),
+        ("As'",  f"{Asp:.0f} mm2", "Luas tulangan tekan"),
+    ]:
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
         p.paragraph_format.left_indent  = Cm(0.5)
-        r1 = p.add_run(f"{simb:<6}")
-        r1.bold = True
-        r1.font.size = Pt(10)
-        r1.font.name = "Courier New"
+        r1 = p.add_run(f"{simb:<6}"); r1.bold = True
+        r1.font.size = Pt(10); r1.font.name = "Courier New"
         r2 = p.add_run(f"  =  {nilai:<18}  ({nama})")
-        r2.font.size = Pt(10)
-        r2.font.name = "Courier New"
+        r2.font.size = Pt(10); r2.font.name = "Courier New"
     par(space_after=6)
 
-    # ─── 2. ANALISA PERHITUNGAN ───────────────────────────────
+    # 2. Analisa
     subjudul("2.  ANALISA PERHITUNGAN")
     par("Urutan perhitungan mengacu pada SNI 2847:2019.", size=10, italic=True,
         color=(0x55, 0x55, 0x55), space_after=8)
-
     for s in steps:
-        # Judul langkah
         p_hdr = doc.add_paragraph()
-        p_hdr.paragraph_format.space_before = Pt(8)
-        p_hdr.paragraph_format.space_after  = Pt(1)
-        r_no  = p_hdr.add_run(f"{s['no']}  ")
-        r_no.bold      = True
-        r_no.font.size = Pt(10)
-        r_no.font.color.rgb = RGBColor(0x1A, 0x3C, 0x5E)
-        r_jdl = p_hdr.add_run(s["judul"])
-        r_jdl.bold      = True
-        r_jdl.font.size = Pt(10)
-
-        # Referensi pasal
+        p_hdr.paragraph_format.space_before = Pt(8); p_hdr.paragraph_format.space_after = Pt(1)
+        r_no = p_hdr.add_run(f"{s['no']}  "); r_no.bold = True
+        r_no.font.size = Pt(10); r_no.font.color.rgb = RGBColor(0x1A, 0x3C, 0x5E)
+        r_jdl = p_hdr.add_run(s["judul"]); r_jdl.bold = True; r_jdl.font.size = Pt(10)
         p_ref = doc.add_paragraph()
-        p_ref.paragraph_format.space_before = Pt(0)
-        p_ref.paragraph_format.space_after  = Pt(2)
+        p_ref.paragraph_format.space_before = Pt(0); p_ref.paragraph_format.space_after = Pt(2)
         p_ref.paragraph_format.left_indent  = Cm(0.5)
-        r_ref = p_ref.add_run(f"[{s['ref']}]")
-        r_ref.italic   = True
-        r_ref.font.size = Pt(8.5)
-        r_ref.font.color.rgb = RGBColor(0x15, 0x65, 0xC0)
-
-        # Baris-baris perhitungan
+        r_ref = p_ref.add_run(f"[{s['ref']}]"); r_ref.italic = True
+        r_ref.font.size = Pt(8.5); r_ref.font.color.rgb = RGBColor(0x15, 0x65, 0xC0)
         for baris in s["isi"].split("\n"):
             p_b = doc.add_paragraph()
-            p_b.paragraph_format.space_before = Pt(0)
-            p_b.paragraph_format.space_after  = Pt(1)
+            p_b.paragraph_format.space_before = Pt(0); p_b.paragraph_format.space_after = Pt(1)
             p_b.paragraph_format.left_indent  = Cm(0.5)
             r_b = p_b.add_run(baris if baris.strip() else " ")
-            r_b.font.name = "Courier New"
-            r_b.font.size = Pt(9.5)
-            is_result = baris.strip().startswith("-->") or "[OK]" in baris or "[TIDAK OK]" in baris
-            if is_result:
+            r_b.font.name = "Courier New"; r_b.font.size = Pt(9.5)
+            if baris.strip().startswith("-->") or "[OK]" in baris or "[TIDAK OK]" in baris:
                 r_b.bold = True
-                r_b.font.color.rgb = (
-                    RGBColor(0x1B, 0x5E, 0x20) if s["ok"] else RGBColor(0xB7, 0x1C, 0x1C)
-                )
-
+                r_b.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if s["ok"]
+                                      else RGBColor(0xB7, 0x1C, 0x1C))
     par(space_after=6)
 
-    # ─── 3. RANGKUMAN ─────────────────────────────────────────
+    # 3. Rangkuman
     subjudul("3.  RANGKUMAN HASIL")
-
-    rangkuman = [
-        ("Beta-1",    f"{R['beta1']:.4f}",         ""),
-        ("a",         f"{R['a']:.2f} mm",           "Kedalaman blok tegangan"),
-        ("c",         f"{R['c']:.2f} mm",           "Kedalaman sumbu netral"),
-        ("et",        f"{R['et']:.5f}",             "Regangan tarik tulangan"),
-        ("Phi",       f"{R['phi']:.4f}",            "Faktor reduksi"),
-        ("Rho",       f"{R['rho']*100:.4f}%",       "Rasio tulangan aktual"),
-        ("Rho-min",   f"{R['rho_min']*100:.4f}%",   "Batas minimum"),
-        ("Rho-max",   f"{R['rho_max']*100:.4f}%",   "Batas maksimum"),
-        ("Mn",        f"{R['Mn']:.3f} kN.m",        "Momen nominal"),
-        ("Phi.Mn",    f"{R['phiMn']:.3f} kN.m",     "Momen rencana"),
-    ]
-    for simb, nilai, ket in rangkuman:
+    for simb, nilai, ket in [
+        ("Beta-1",  f"{R['beta1']:.4f}",        ""),
+        ("a",       f"{R['a']:.2f} mm",          "Kedalaman blok tegangan"),
+        ("c",       f"{R['c']:.2f} mm",          "Kedalaman sumbu netral"),
+        ("et",      f"{R['et']:.5f}",            "Regangan tarik tulangan"),
+        ("Phi",     f"{R['phi']:.4f}",           "Faktor reduksi"),
+        ("Rho",     f"{R['rho']*100:.4f}%",      "Rasio tulangan aktual"),
+        ("Rho-min", f"{R['rho_min']*100:.4f}%",  "Batas minimum"),
+        ("Rho-max", f"{R['rho_max']*100:.4f}%",  "Batas maksimum"),
+        ("Mn",      f"{R['Mn']:.3f} kN.m",       "Momen nominal"),
+        ("Phi.Mn",  f"{R['phiMn']:.3f} kN.m",    "Momen rencana"),
+    ]:
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(2)
         p.paragraph_format.left_indent  = Cm(0.5)
-        r1 = p.add_run(f"{simb:<12}")
-        r1.bold = True
-        r1.font.size = Pt(10)
-        r1.font.name = "Courier New"
+        r1 = p.add_run(f"{simb:<12}"); r1.bold = True
+        r1.font.size = Pt(10); r1.font.name = "Courier New"
         r2 = p.add_run(f"=  {nilai:<22}  {ket}")
-        r2.font.size = Pt(10)
-        r2.font.name = "Courier New"
+        r2.font.size = Pt(10); r2.font.name = "Courier New"
     par(space_after=6)
 
-    # ─── 4. KONTROL PENAMPANG ─────────────────────────────────
+    # 4. Kontrol
     subjudul("4.  KONTROL PENAMPANG")
-
     all_ok = R["ok_rho_min"] and R["ok_rho_max"] and R["ok_et"]
-
-    kontrol = [
+    for teks_k, ok_k in [
         (f"Rho-min = {R['rho_min']*100:.4f}%  <=  Rho = {R['rho']*100:.4f}%", R["ok_rho_min"]),
         (f"Rho-max = {R['rho_max']*100:.4f}%  >=  Rho = {R['rho']*100:.4f}%", R["ok_rho_max"]),
-        (f"et      = {R['et']:.5f}  >=  0.004", R["ok_et"]),
-    ]
-    for teks_k, ok_k in kontrol:
+        (f"et      = {R['et']:.5f}  >=  0.004",                                 R["ok_et"]),
+    ]:
         p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after  = Pt(3)
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(3)
         p.paragraph_format.left_indent  = Cm(0.5)
         r_k = p.add_run(f"{teks_k}   --> {'[OK]' if ok_k else '[TIDAK OK]'}")
-        r_k.font.name = "Courier New"
-        r_k.font.size = Pt(10)
-        r_k.bold = True
-        r_k.font.color.rgb = (
-            RGBColor(0x1B, 0x5E, 0x20) if ok_k else RGBColor(0xB7, 0x1C, 0x1C)
-        )
-
+        r_k.font.name = "Courier New"; r_k.font.size = Pt(10); r_k.bold = True
+        r_k.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if ok_k
+                              else RGBColor(0xB7, 0x1C, 0x1C))
     par(space_after=4)
-
     if all_ok and R["et"] >= 0.005:
-        status_teks = "KESIMPULAN : Penampang OK - Tension-controlled, memenuhi seluruh syarat SNI 2847:2019."
-        ok_final = True
+        kes = "KESIMPULAN : Penampang OK - Tension-controlled, memenuhi seluruh syarat SNI 2847:2019."
+        ok_f = True
     elif all_ok:
-        status_teks = "KESIMPULAN : Penampang diterima dengan catatan - Zona transisi (perlu tinjauan ulang)."
-        ok_final = True
+        kes = "KESIMPULAN : Penampang diterima - Zona transisi (perlu tinjauan ulang)."
+        ok_f = True
     else:
-        masalah = []
-        if not R["ok_rho_min"]: masalah.append("rho < rho-min")
-        if not R["ok_rho_max"]: masalah.append("rho > rho-max")
-        if not R["ok_et"]:      masalah.append("et < 0.004")
-        status_teks = "KESIMPULAN : Penampang TIDAK OK - " + " | ".join(masalah)
-        ok_final = False
-
+        m = []
+        if not R["ok_rho_min"]: m.append("rho < rho-min")
+        if not R["ok_rho_max"]: m.append("rho > rho-max")
+        if not R["ok_et"]:      m.append("et < 0.004")
+        kes = "KESIMPULAN : Penampang TIDAK OK - " + " | ".join(m)
+        ok_f = False
     p_kes = doc.add_paragraph()
-    p_kes.paragraph_format.space_before = Pt(6)
-    p_kes.paragraph_format.space_after  = Pt(4)
-    r_kes = p_kes.add_run(status_teks)
-    r_kes.bold      = True
-    r_kes.font.size = Pt(10.5)
-    r_kes.font.color.rgb = (
-        RGBColor(0x1B, 0x5E, 0x20) if ok_final else RGBColor(0xB7, 0x1C, 0x1C)
-    )
-
-    # Footer
+    p_kes.paragraph_format.space_before = Pt(6); p_kes.paragraph_format.space_after = Pt(4)
+    r_kes = p_kes.add_run(kes); r_kes.bold = True; r_kes.font.size = Pt(10.5)
+    r_kes.font.color.rgb = (RGBColor(0x1B, 0x5E, 0x20) if ok_f
+                            else RGBColor(0xB7, 0x1C, 0x1C))
     garis()
-    par(
-        "Referensi: SNI 2847:2019 | ACI 318-14  --  "
+    par("Referensi: SNI 2847:2019 | ACI 318-14  --  "
         "Untuk keperluan profesional, verifikasi mandiri tetap diperlukan.",
         size=8, italic=True, color=(0x99, 0x99, 0x99),
-        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=0,
-    )
+        align=WD_ALIGN_PARAGRAPH.CENTER, space_after=0)
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
+    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
 
-# ════════════════════════════════════════════════════════════
-# GENERATOR PDF (.pdf)  —  layout formal + watermark
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# GENERATOR PDF (.pdf)
+# ============================================================
 WATERMARK_TEXT = "DIHASILKAN OLEH: LADOSI ENGINEERING"
-BRAND_COLOR    = (26, 60, 94)    # #1a3c5e
-OK_COLOR       = (27, 94, 32)    # hijau
-FAIL_COLOR     = (183, 28, 28)   # merah
+BRAND_COLOR    = (26, 60, 94)
+OK_COLOR       = (27, 94, 32)
+FAIL_COLOR     = (183, 28, 28)
 GRAY           = (120, 120, 120)
 
 
-# ════════════════════════════════════════════════════════════
-# SANITASI STRING UNTUK PDF (fpdf2 hanya mendukung Latin-1)
-# ════════════════════════════════════════════════════════════
-_UNICODE_MAP = {
-    "\u2014": "-",    # em dash —
-    "\u2013": "-",    # en dash –
-    "\u2019": "'",    # right single quote
-    "\u2018": "'",    # left single quote
-    "\u201c": '"',    # left double quote
-    "\u201d": '"',    # right double quote
-    "\u00b2": "2",    # superscript 2 (mm2)
-    "\u00b3": "3",    # superscript 3
-    "\u00b0": " deg", # degree
-    "\u00d7": "x",    # multiplication x
-    "\u2265": ">=",   # >=
-    "\u2264": "<=",   # <=
-    "\u2260": "!=",   # !=
-    "\u221a": "sqrt", # sqrt
-    "\u03c6": "Phi",  # phi
-    "\u03b2": "Beta", # beta
-    "\u03b5": "et",   # epsilon
-    "\u03c1": "Rho",  # rho
-    "\u03bc": "mu",   # mu
-    "\u2022": "-",    # bullet
-    "\u2192": "->",   # arrow right
-    "\u00b7": ".",    # middle dot
-    "\u00e9": "e",    # e acute
-    "\u00e8": "e",    # e grave
-    "\u00e0": "a",    # a grave
-}
-
-def sp(teks: str) -> str:
-    """Sanitasi string agar aman untuk fpdf2 (Latin-1 only)."""
-    if not isinstance(teks, str):
-        teks = str(teks)
-    for ch, repl in _UNICODE_MAP.items():
-        teks = teks.replace(ch, repl)
-    return teks.encode("latin-1", errors="replace").decode("latin-1")
-
-
-class LaporanPDF(FPDF):
+class LaporanBalokPDF(FPDF):
     def __init__(self, nama_proyek):
         super().__init__()
-        self.nama_proyek = sp(nama_proyek)  # sanitasi dari awal
+        self.nama_proyek = sp(nama_proyek)
         self.set_margins(25, 25, 20)
         self.set_auto_page_break(auto=True, margin=25)
 
     def header(self):
-        # Garis atas
-        self.set_draw_color(*BRAND_COLOR)
-        self.set_line_width(0.8)
+        self.set_draw_color(*BRAND_COLOR); self.set_line_width(0.8)
         self.line(25, 15, 190, 15)
-
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(*BRAND_COLOR)
+        self.set_font("Helvetica", "B", 9); self.set_text_color(*BRAND_COLOR)
         self.set_xy(25, 17)
-        self.cell(0, 5, "LAPORAN PERHITUNGAN STRUKTUR  |  SNI 2847:2019", ln=False, align="L")
-        self.set_font("Helvetica", "", 8)
-        self.set_text_color(*GRAY)
+        self.cell(0, 5, sp("LAPORAN PERHITUNGAN BALOK BETON  |  SNI 2847:2019"),
+                  ln=False, align="L")
+        self.set_font("Helvetica", "", 8); self.set_text_color(*GRAY)
         self.set_xy(25, 17)
-        self.cell(0, 5, f"Proyek: {self.nama_proyek}", ln=False, align="R")
+        self.cell(0, 5, sp(f"Proyek: {self.nama_proyek}"), ln=False, align="R")
         self.ln(10)
 
     def footer(self):
         self.set_y(-18)
-        self.set_draw_color(*BRAND_COLOR)
-        self.set_line_width(0.4)
+        self.set_draw_color(*BRAND_COLOR); self.set_line_width(0.4)
         self.line(25, self.get_y(), 190, self.get_y())
-        self.set_font("Helvetica", "I", 7.5)
-        self.set_text_color(*GRAY)
+        self.set_font("Helvetica", "I", 7.5); self.set_text_color(*GRAY)
         self.cell(0, 6,
-            "Referensi: SNI 2847:2019 | ACI 318-14 - "
-            "Untuk keperluan profesional, verifikasi mandiri tetap diperlukan.",
+            sp("Referensi: SNI 2847:2019 | ACI 318-14 - "
+               "Untuk keperluan profesional, verifikasi mandiri tetap diperlukan."),
             align="C")
         self.set_xy(25, self.get_y())
         self.set_font("Helvetica", "", 7.5)
-        self.cell(0, 6, f"Halaman {self.page_no()}", align="R")
+        self.cell(0, 6, sp(f"Halaman {self.page_no()}"), align="R")
 
     def watermark(self):
-        """Teks watermark diagonal transparan di tengah halaman."""
-        self.set_font("Helvetica", "B", 28)
-        # Warna abu muda (simulasi transparan)
-        self.set_text_color(210, 215, 220)
-        # Posisi tengah halaman
-        x_center = self.w / 2
-        y_center = self.h / 2
-        with self.rotation(40, x_center, y_center):
-            self.set_xy(x_center - 65, y_center - 6)
+        self.set_font("Helvetica", "B", 28); self.set_text_color(210, 215, 220)
+        xc, yc = self.w / 2, self.h / 2
+        with self.rotation(40, xc, yc):
+            self.set_xy(xc - 65, yc - 6)
             self.cell(130, 12, sp(WATERMARK_TEXT), align="C")
-        self.set_text_color(0, 0, 0)   # reset
+        self.set_text_color(0, 0, 0)
 
     def section_title(self, teks):
-        self.set_font("Helvetica", "B", 11)
-        self.set_text_color(*BRAND_COLOR)
-        self.ln(4)
-        self.cell(0, 7, sp(teks), ln=True)
-        self.set_draw_color(*BRAND_COLOR)
-        self.set_line_width(0.4)
+        self.set_font("Helvetica", "B", 11); self.set_text_color(*BRAND_COLOR)
+        self.ln(4); self.cell(0, 7, sp(teks), ln=True)
+        self.set_draw_color(*BRAND_COLOR); self.set_line_width(0.4)
         self.line(self.get_x(), self.get_y(), 190, self.get_y())
-        self.ln(3)
-        self.set_text_color(0, 0, 0)
+        self.ln(3); self.set_text_color(0, 0, 0)
 
     def mono_line(self, teks, bold=False, color=None):
         self.set_font("Courier", "B" if bold else "", 9)
-        if color:
-            self.set_text_color(*color)
-        self.set_x(28)
-        self.multi_cell(0, 4.5, sp(teks))
+        if color: self.set_text_color(*color)
+        self.set_x(28); self.multi_cell(0, 4.5, sp(teks))
         self.set_text_color(0, 0, 0)
 
 
-def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
-    pdf = LaporanPDF(nama_proyek)
-    pdf.add_page()
-    pdf.watermark()
+def create_pdf_balok(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
+    pdf = LaporanBalokPDF(nama_proyek)
+    pdf.add_page(); pdf.watermark()
 
-    # ─── JUDUL ───────────────────────────────────────────────
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.set_text_color(*BRAND_COLOR)
-    pdf.ln(2)
+    pdf.set_font("Helvetica", "B", 15); pdf.set_text_color(*BRAND_COLOR); pdf.ln(2)
     pdf.cell(0, 9, sp("LAPORAN PERHITUNGAN STRUKTUR"), ln=True, align="C")
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 7, sp("Kapasitas Lentur Balok Beton Bertulang"), ln=True, align="C")
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(*GRAY)
-    pdf.cell(0, 5, sp(f"Referensi: SNI 2847:2019 (ACI 318-14)"), ln=True, align="C")
+    pdf.set_font("Helvetica", "I", 9); pdf.set_text_color(*GRAY)
+    pdf.cell(0, 5, sp("Referensi: SNI 2847:2019 (ACI 318-14)"), ln=True, align="C")
     pdf.cell(0, 5, sp(f"Proyek: {nama_proyek}   |   Tanggal: {datetime.datetime.now().strftime('%d %B %Y')}"),
              ln=True, align="C")
-    pdf.ln(6)
-    pdf.set_draw_color(*BRAND_COLOR)
-    pdf.set_line_width(0.6)
-    pdf.line(25, pdf.get_y(), 190, pdf.get_y())
-    pdf.ln(6)
-    pdf.set_text_color(0, 0, 0)
+    pdf.ln(6); pdf.set_draw_color(*BRAND_COLOR); pdf.set_line_width(0.6)
+    pdf.line(25, pdf.get_y(), 190, pdf.get_y()); pdf.ln(6); pdf.set_text_color(0, 0, 0)
 
-    # ─── 1. DATA INPUT ───────────────────────────────────────
     pdf.section_title("1.  DATA INPUT PENAMPANG")
-    pdf.set_font("Courier", "", 9.5)
-    data_input = [
-        ("fc",    f"{fc:.1f} MPa",   "Kuat tekan beton"),
-        ("fy",    f"{fy:.0f} MPa",   "Kuat leleh tulangan"),
-        ("b",     f"{b:.0f} mm",     "Lebar balok"),
-        ("h",     f"{h:.0f} mm",     "Tinggi total balok"),
-        ("d",     f"{d:.0f} mm",     "Tinggi efektif"),
-        ("As",    f"{As:.0f} mm2",   "Luas tulangan tarik"),
-        ("As'",   f"{Asp:.0f} mm2",  "Luas tulangan tekan"),
-    ]
-    for simb, nilai, ket in data_input:
-        pdf.set_x(28)
-        pdf.set_font("Courier", "B", 9.5)
+    for simb, nilai, ket in [
+        ("fc",   f"{fc:.1f} MPa",   "Kuat tekan beton"),
+        ("fy",   f"{fy:.0f} MPa",   "Kuat leleh tulangan"),
+        ("b",    f"{b:.0f} mm",     "Lebar balok"),
+        ("h",    f"{h:.0f} mm",     "Tinggi total balok"),
+        ("d",    f"{d:.0f} mm",     "Tinggi efektif"),
+        ("As",   f"{As:.0f} mm2",   "Luas tulangan tarik"),
+        ("As'",  f"{Asp:.0f} mm2",  "Luas tulangan tekan"),
+    ]:
+        pdf.set_x(28); pdf.set_font("Courier", "B", 9.5)
         pdf.cell(18, 5, sp(f"{simb:<6}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
         pdf.cell(35, 5, sp(f"=  {nilai}"), ln=False)
-        pdf.set_font("Helvetica", "I", 8.5)
-        pdf.set_text_color(*GRAY)
-        pdf.cell(0, 5, sp(f"({ket})"), ln=True)
-        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "I", 8.5); pdf.set_text_color(*GRAY)
+        pdf.cell(0, 5, sp(f"({ket})"), ln=True); pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
-    # ─── 2. ANALISA PERHITUNGAN ───────────────────────────────
     pdf.section_title("2.  ANALISA PERHITUNGAN")
-
     for s in steps:
-        # Cek apakah halaman hampir habis
         if pdf.get_y() > 240:
-            pdf.add_page()
-            pdf.watermark()
-
-        # Header langkah
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(*BRAND_COLOR)
-        pdf.set_x(25)
+            pdf.add_page(); pdf.watermark()
+        pdf.set_font("Helvetica", "B", 10); pdf.set_text_color(*BRAND_COLOR); pdf.set_x(25)
         pdf.cell(0, 6, sp(f"{s['no']}  {s['judul']}"), ln=True)
-
-        # Referensi
-        pdf.set_font("Helvetica", "I", 8)
-        pdf.set_text_color(*GRAY)
-        pdf.set_x(28)
-        pdf.cell(0, 4, sp(f"[{s['ref']}]"), ln=True)
-        pdf.set_text_color(0, 0, 0)
-
-        # Baris perhitungan
+        pdf.set_font("Helvetica", "I", 8); pdf.set_text_color(*GRAY); pdf.set_x(28)
+        pdf.cell(0, 4, sp(f"[{s['ref']}]"), ln=True); pdf.set_text_color(0, 0, 0)
         for baris in s["isi"].split("\n"):
             is_result = (baris.strip().startswith("-->") or
                          "[OK]" in baris or "[TIDAK OK]" in baris)
-            if is_result:
-                pdf.mono_line(
-                    baris,
-                    bold=True,
-                    color=OK_COLOR if s["ok"] else FAIL_COLOR,
-                )
-            else:
-                pdf.mono_line(baris if baris.strip() else "")
+            pdf.mono_line(baris if baris.strip() else "",
+                          bold=is_result,
+                          color=(OK_COLOR if s["ok"] else FAIL_COLOR) if is_result else None)
         pdf.ln(2)
 
-    # ─── 3. RANGKUMAN ─────────────────────────────────────────
     if pdf.get_y() > 210:
-        pdf.add_page()
-        pdf.watermark()
-
+        pdf.add_page(); pdf.watermark()
     pdf.section_title("3.  RANGKUMAN HASIL")
-    pdf.set_font("Courier", "", 9.5)
-    rangkuman = [
+    for simb, nilai, ket in [
         ("Beta-1",  f"{R['beta1']:.4f}",        ""),
         ("a",       f"{R['a']:.2f} mm",          "Kedalaman blok tegangan"),
         ("c",       f"{R['c']:.2f} mm",          "Kedalaman sumbu netral"),
@@ -685,73 +540,91 @@ def create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek):
         ("Rho-max", f"{R['rho_max']*100:.4f}%",  "Batas maksimum"),
         ("Mn",      f"{R['Mn']:.3f} kN.m",       "Momen nominal"),
         ("Phi.Mn",  f"{R['phiMn']:.3f} kN.m",    "Momen rencana"),
-    ]
-    for simb, nilai, ket in rangkuman:
-        pdf.set_x(28)
-        pdf.set_font("Courier", "B", 9.5)
+    ]:
+        pdf.set_x(28); pdf.set_font("Courier", "B", 9.5)
         pdf.cell(22, 5, sp(f"{simb:<10}"), ln=False)
         pdf.set_font("Courier", "", 9.5)
         pdf.cell(38, 5, sp(f"=  {nilai}"), ln=False)
         if ket:
-            pdf.set_font("Helvetica", "I", 8.5)
-            pdf.set_text_color(*GRAY)
-            pdf.cell(0, 5, sp(f"({ket})"), ln=True)
-            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "I", 8.5); pdf.set_text_color(*GRAY)
+            pdf.cell(0, 5, sp(f"({ket})"), ln=True); pdf.set_text_color(0, 0, 0)
         else:
             pdf.ln()
     pdf.ln(4)
 
-    # ─── 4. KONTROL ───────────────────────────────────────────
     pdf.section_title("4.  KONTROL PENAMPANG")
-
-    kontrol = [
-        (f"Rho-min = {R['rho_min']*100:.4f}%  <=  Rho = {R['rho']*100:.4f}%",
-         R["ok_rho_min"]),
-        (f"Rho-max = {R['rho_max']*100:.4f}%  >=  Rho = {R['rho']*100:.4f}%",
-         R["ok_rho_max"]),
-        (f"et      = {R['et']:.5f}  >=  0.004",
-         R["ok_et"]),
-    ]
-    for teks_k, ok_k in kontrol:
-        tanda = "[OK]" if ok_k else "[TIDAK OK]"
-        pdf.set_x(28)
-        pdf.set_font("Courier", "B", 9.5)
+    for teks_k, ok_k in [
+        (f"Rho-min = {R['rho_min']*100:.4f}%  <=  Rho = {R['rho']*100:.4f}%", R["ok_rho_min"]),
+        (f"Rho-max = {R['rho_max']*100:.4f}%  >=  Rho = {R['rho']*100:.4f}%", R["ok_rho_max"]),
+        (f"et      = {R['et']:.5f}  >=  0.004",                                 R["ok_et"]),
+    ]:
+        pdf.set_x(28); pdf.set_font("Courier", "B", 9.5)
         pdf.set_text_color(*(OK_COLOR if ok_k else FAIL_COLOR))
-        pdf.cell(0, 5.5, sp(f"{teks_k}   --> {tanda}"), ln=True)
+        pdf.cell(0, 5.5, sp(f"{teks_k}   --> {'[OK]' if ok_k else '[TIDAK OK]'}"), ln=True)
         pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
-
     all_ok = R["ok_rho_min"] and R["ok_rho_max"] and R["ok_et"]
     if all_ok and R["et"] >= 0.005:
         kes = "KESIMPULAN : Penampang OK - Tension-controlled, memenuhi seluruh syarat SNI 2847:2019."
-        ok_final = True
+        ok_f = True
     elif all_ok:
         kes = "KESIMPULAN : Penampang diterima - Zona transisi (perlu tinjauan ulang)."
-        ok_final = True
+        ok_f = True
     else:
-        masalah = []
-        if not R["ok_rho_min"]: masalah.append("rho < rho-min")
-        if not R["ok_rho_max"]: masalah.append("rho > rho-max")
-        if not R["ok_et"]:      masalah.append("et < 0.004")
-        kes = "KESIMPULAN : Penampang TIDAK OK - " + " | ".join(masalah)
-        ok_final = False
+        m = []
+        if not R["ok_rho_min"]: m.append("rho < rho-min")
+        if not R["ok_rho_max"]: m.append("rho > rho-max")
+        if not R["ok_et"]:      m.append("et < 0.004")
+        kes = "KESIMPULAN : Penampang TIDAK OK - " + " | ".join(m)
+        ok_f = False
+    pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
+    pdf.set_text_color(*(OK_COLOR if ok_f else FAIL_COLOR))
+    pdf.multi_cell(0, 6, sp(kes)); pdf.set_text_color(0, 0, 0)
 
-    pdf.set_x(25)
-    pdf.set_font("Helvetica", "B", 10.5)
-    pdf.set_text_color(*(OK_COLOR if ok_final else FAIL_COLOR))
-    pdf.multi_cell(0, 6, sp(kes))
-    pdf.set_text_color(0, 0, 0)
-
-    buf = io.BytesIO()
-    pdf.output(buf)
-    buf.seek(0)
+    buf = io.BytesIO(); pdf.output(buf); buf.seek(0)
     return buf
 
 
-# ════════════════════════════════════════════════════════════
-# UI — HEADER
-# ════════════════════════════════════════════════════════════
-st.markdown('<p class="main-title">🏗️ Kapasitas Lentur Balok Beton Bertulang</p>',
+# ============================================================
+# HELPER SESSION STATE
+# ============================================================
+def _init_state():
+    """Inisialisasi semua kunci session_state jika belum ada."""
+    defaults = {
+        "balok_hasil":      None,   # dict R
+        "balok_steps":      None,   # list steps
+        "balok_word":       None,   # bytes
+        "balok_pdf":        None,   # bytes
+        "balok_last_inputs": {},    # dict snapshot input saat hitung
+        "balok_nama_file":  "",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _snapshot_inputs(nama_proyek, fc, fy, b, h, d, As, Asp):
+    """Kembalikan dict snapshot nilai input saat ini."""
+    return dict(
+        nama_proyek=nama_proyek,
+        fc=fc, fy=fy, b=b, h=h, d=d, As=As, Asp=Asp,
+    )
+
+
+def _inputs_changed(snap_now):
+    """True jika input sekarang berbeda dari snapshot terakhir."""
+    last = st.session_state.balok_last_inputs
+    if not last:
+        return False
+    return any(snap_now.get(k) != last.get(k) for k in snap_now)
+
+
+# ============================================================
+# UI - HEADER
+# ============================================================
+_init_state()
+
+st.markdown('<p class="main-title">Kapasitas Lentur Balok Beton Bertulang</p>',
             unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-title">Referensi: SNI 2847:2019 (setara ACI 318-14) '
@@ -759,52 +632,58 @@ st.markdown(
     unsafe_allow_html=True)
 st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════
-# UI — LAYOUT DUA KOLOM
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# UI - LAYOUT DUA KOLOM
+# ============================================================
 col_inp, col_out = st.columns([1, 2], gap="large")
 
 with col_inp:
-    st.markdown("### 📋 Data Input")
+    st.markdown("### Data Input")
 
     nama_proyek = st.text_input(
         "Nama Proyek (untuk header laporan)",
         value="Laporan Analisa Struktur",
-        help="Nama proyek akan muncul di header Word dan PDF.",
+        key="balok_inp_nama",
     )
 
     st.markdown("**Material**")
-    fc = st.number_input("f'c — Kuat tekan beton (MPa)",
-                         min_value=17.0, max_value=100.0, value=30.0, step=1.0, format="%.1f")
-    fy = st.number_input("fy — Kuat leleh tulangan (MPa)",
-                         min_value=240.0, max_value=600.0, value=400.0, step=10.0, format="%.0f")
+    fc = st.number_input("f'c - Kuat tekan beton (MPa)",
+                         min_value=17.0, max_value=100.0, value=30.0,
+                         step=1.0, format="%.1f", key="balok_inp_fc")
+    fy = st.number_input("fy - Kuat leleh tulangan (MPa)",
+                         min_value=240.0, max_value=600.0, value=400.0,
+                         step=10.0, format="%.0f", key="balok_inp_fy")
 
     st.markdown("**Geometri**")
     cb, ch = st.columns(2)
     with cb:
         b = st.number_input("b (mm)", min_value=100.0, max_value=2000.0,
-                            value=300.0, step=10.0, format="%.0f")
+                            value=300.0, step=10.0, format="%.0f", key="balok_inp_b")
     with ch:
         h = st.number_input("h (mm)", min_value=100.0, max_value=5000.0,
-                            value=500.0, step=10.0, format="%.0f")
-    d = st.number_input("d (mm) — Tinggi efektif (h − selimut − ½D)",
-                        min_value=50.0, max_value=4900.0, value=440.0, step=5.0, format="%.0f")
+                            value=500.0, step=10.0, format="%.0f", key="balok_inp_h")
+    d = st.number_input("d (mm) - Tinggi efektif (h - selimut - 1/2D)",
+                        min_value=50.0, max_value=4900.0, value=440.0,
+                        step=5.0, format="%.0f", key="balok_inp_d")
 
     st.markdown("**Tulangan**")
-    As  = st.number_input("As (mm²) — Tulangan tarik",
+    As  = st.number_input("As (mm2) - Tulangan tarik",
                           min_value=0.0, value=1520.0, step=10.0, format="%.0f",
-                          help="Contoh: 4D22 = 4 × 380.1 = 1520 mm²")
-    Asp = st.number_input("As' (mm²) — Tulangan tekan",
+                          help="Contoh: 4D22 = 4 x 380.1 = 1520 mm2",
+                          key="balok_inp_as")
+    Asp = st.number_input("As' (mm2) - Tulangan tekan",
                           min_value=0.0, value=0.0, step=10.0, format="%.0f",
-                          help="Isi 0 jika tidak ada")
+                          help="Isi 0 jika tidak ada",
+                          key="balok_inp_asp")
 
     st.markdown("")
-    tombol = st.button("⚡ HITUNG KAPASITAS LENTUR",
-                       use_container_width=True, type="primary")
+    tombol = st.button("HITUNG KAPASITAS LENTUR",
+                       use_container_width=True, type="primary",
+                       key="balok_btn_hitung")
 
-    with st.expander("📌 Tabel luas tulangan (mm²)"):
+    with st.expander("Tabel luas tulangan (mm2)"):
         st.markdown("""
-        | Ø | 1 | 2 | 3 | 4 | 5 | 6 |
+        | D | 1 | 2 | 3 | 4 | 5 | 6 |
         |---|---|---|---|---|---|---|
         | D10 | 78.5 | 157 | 236 | 314 | 393 | 471 |
         | D13 | 132.7 | 265 | 398 | 531 | 663 | 796 |
@@ -816,29 +695,75 @@ with col_inp:
         | D32 | 804.2 | 1608 | 2413 | 3217 | 4021 | 4825 |
         """)
 
-# ════════════════════════════════════════════════════════════
-# UI — HASIL + TOMBOL DOWNLOAD
-# ════════════════════════════════════════════════════════════
+# ============================================================
+# PROSES HITUNG - simpan ke session_state
+# ============================================================
+if tombol:
+    if d >= h:
+        st.error("Tinggi efektif d harus lebih kecil dari tinggi total h!")
+    elif As <= 0:
+        st.error("Luas tulangan tarik As harus lebih besar dari 0!")
+    else:
+        snap = _snapshot_inputs(nama_proyek, fc, fy, b, h, d, As, Asp)
+        R     = hitung_balok(fc, fy, b, h, d, As, Asp)
+        steps = buat_steps_balok(fc, fy, b, h, d, As, Asp, R)
+        w_buf = create_word_balok(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek)
+        p_buf = create_pdf_balok(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek)
+
+        st.session_state.balok_hasil       = R
+        st.session_state.balok_steps       = steps
+        st.session_state.balok_word        = w_buf.getvalue()
+        st.session_state.balok_pdf         = p_buf.getvalue()
+        st.session_state.balok_last_inputs = snap
+        st.session_state.balok_nama_file   = (
+            f"Laporan_Lentur_Balok_fc{int(fc)}_fy{int(fy)}_b{int(b)}x{int(h)}"
+        )
+
+# ============================================================
+# UI - HASIL (selalu tampil jika ada di session_state)
+# ============================================================
 with col_out:
-    if tombol:
-        if d >= h:
-            st.error("⚠️ Tinggi efektif d harus lebih kecil dari tinggi total h!")
-            st.stop()
-        if As <= 0:
-            st.error("⚠️ Luas tulangan tarik As harus lebih besar dari 0!")
-            st.stop()
+    if st.session_state.balok_hasil is None:
+        st.info("Isi data di panel kiri, lalu klik HITUNG KAPASITAS LENTUR")
+        st.markdown("""
+        **Yang akan dihitung secara runtut:**
+        1. Faktor Beta-1 (blok tegangan Whitney)
+        2. Gaya tarik tulangan T
+        3. Kedalaman blok tegangan a
+        4. Kedalaman sumbu netral c
+        5. Rasio tulangan aktual Rho
+        6. Batas Rho-min (SNI Pasal 9.6.1.2)
+        7. Batas Rho-max (0.75 Rho-bal)
+        8. Regangan tarik et
+        9. Faktor reduksi Phi
+        10. Momen nominal Mn dan momen rencana Phi.Mn
 
-        R     = hitung(fc, fy, b, h, d, As, Asp)
-        steps = buat_steps(fc, fy, b, h, d, As, Asp, R)
+        **Output tersedia dalam dua format:**
+        - Word (.docx) - format natural, bisa diedit
+        - PDF (.pdf)  - formal + watermark LADOSI ENGINEERING
+        """)
+    else:
+        R     = st.session_state.balok_hasil
+        steps = st.session_state.balok_steps
 
-        # ── Metrik Utama ────────────────────────────────────
-        st.markdown("### 📊 Hasil Utama")
+        # -- Soft Warning jika input diubah setelah hitung --
+        snap_now = _snapshot_inputs(nama_proyek, fc, fy, b, h, d, As, Asp)
+        if _inputs_changed(snap_now):
+            st.warning(
+                "Perhatian: Data input telah diubah. "
+                "Hasil ringkasan dan file laporan di bawah ini masih menggunakan "
+                "data perhitungan sebelumnya. Silakan klik tombol HITUNG kembali "
+                "untuk memperbarui laporan."
+            )
+
+        # -- Metrik Utama ------------------------------------
+        st.markdown("### Hasil Utama")
         m1, m2, m3, m4 = st.columns(4)
         for col, lbl, val, unt in [
-            (m1, "Momen Nominal Mn",    f"{R['Mn']:.2f}",    "kN·m"),
-            (m2, "φMn (Momen Rencana)", f"{R['phiMn']:.2f}", "kN·m"),
-            (m3, "Faktor Reduksi φ",    f"{R['phi']:.3f}",   "—"),
-            (m4, "Regangan εt",         f"{R['et']:.4f}",    "—"),
+            (m1, "Momen Nominal Mn",    f"{R['Mn']:.2f}",    "kN.m"),
+            (m2, "Phi.Mn (Momen Renc.)",f"{R['phiMn']:.2f}", "kN.m"),
+            (m3, "Faktor Reduksi Phi",  f"{R['phi']:.3f}",   "-"),
+            (m4, "Regangan et",         f"{R['et']:.4f}",    "-"),
         ]:
             with col:
                 st.markdown(
@@ -846,126 +771,92 @@ with col_out:
                     f'<div class="metric-lbl">{lbl}</div>'
                     f'<div class="metric-val">{val}</div>'
                     f'<div class="metric-unt">{unt}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                    f'</div>', unsafe_allow_html=True)
         st.markdown("")
 
-        # ── Status ──────────────────────────────────────────
+        # -- Status ------------------------------------------
         all_ok = R["ok_rho_min"] and R["ok_rho_max"] and R["ok_et"]
         if all_ok and R["et"] >= 0.005:
             st.markdown(
-                '<div class="result-ok">✅ PENAMPANG OK — '
+                '<div class="result-ok">[OK] PENAMPANG OK - '
                 'Tension-controlled, memenuhi seluruh syarat SNI 2847:2019</div>',
                 unsafe_allow_html=True)
         elif all_ok:
             st.markdown(
-                '<div class="result-warn">⚠️ PERLU TINJAUAN — '
-                'Zona transisi (0.004 ≤ εt &lt; 0.005)</div>',
+                '<div class="result-warn">[!] PERLU TINJAUAN - '
+                'Zona transisi (0.004 &lt;= et &lt; 0.005)</div>',
                 unsafe_allow_html=True)
         else:
             masalah = []
-            if not R["ok_rho_min"]: masalah.append("ρ &lt; ρ_min → tambah tulangan")
-            if not R["ok_rho_max"]: masalah.append("ρ > ρ_max → kurangi tulangan")
-            if not R["ok_et"]:      masalah.append("εt &lt; 0.004 → tidak memenuhi syarat")
+            if not R["ok_rho_min"]: masalah.append("Rho < Rho-min - tambah tulangan")
+            if not R["ok_rho_max"]: masalah.append("Rho > Rho-max - kurangi tulangan")
+            if not R["ok_et"]:      masalah.append("et < 0.004 - tidak memenuhi syarat")
             st.markdown(
-                f'<div class="result-fail">❌ TIDAK OK — {" | ".join(masalah)}</div>',
+                f'<div class="result-fail">[X] TIDAK OK - {" | ".join(masalah)}</div>',
                 unsafe_allow_html=True)
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-        # ── Langkah Perhitungan ──────────────────────────────
-        st.markdown("### 📐 Urutan Perhitungan")
+        # -- Langkah Perhitungan ------------------------------
+        st.markdown("### Urutan Perhitungan")
         for s in steps:
             warna = "#2e7d32" if s["ok"] else "#c62828"
-            tanda = "✓" if s["ok"] else "✗"
+            tanda = "[OK]" if s["ok"] else "[X]"
             st.markdown(
                 f'<div class="step-box" style="border-left-color:{warna}">'
                 f'<div class="ref-badge">{s["ref"]}</div><br>'
-                f'<div class="step-hdr">{s["no"]} — {s["judul"]} &nbsp; {tanda}</div>'
+                f'<div class="step-hdr">{s["no"]} - {s["judul"]} &nbsp; {tanda}</div>'
                 f'<pre style="margin:0;font-size:.82rem;white-space:pre-wrap;'
                 f'font-family:monospace">{s["isi"]}</pre></div>',
-                unsafe_allow_html=True,
-            )
+                unsafe_allow_html=True)
 
-        # ── Tabel Rangkuman ──────────────────────────────────
+        # -- Tabel Rangkuman ----------------------------------
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("### 📋 Tabel Rangkuman")
-        et_s = ("✅ OK" if R["et"] >= 0.005
-                else "⚠️ Transisi" if R["et"] >= 0.004
-                else "❌ Tidak OK")
-        rh_s = "✅ OK" if (R["ok_rho_min"] and R["ok_rho_max"]) else "❌ Tidak OK"
+        st.markdown("### Tabel Rangkuman")
+        et_s = "[OK] OK" if R["et"] >= 0.005 else ("[!] Transisi" if R["et"] >= 0.004 else "[X] Tidak OK")
+        rh_s = "[OK] OK" if (R["ok_rho_min"] and R["ok_rho_max"]) else "[X] Tidak OK"
         df = pd.DataFrame({
-            "Parameter": ["β₁","a (mm)","c (mm)","εt","φ",
-                          "ρ (%)","ρ_min (%)","ρ_max (%)","Mn (kN·m)","φMn (kN·m)"],
+            "Parameter": ["Beta-1","a (mm)","c (mm)","et","Phi",
+                          "Rho (%)","Rho-min (%)","Rho-max (%)","Mn (kN.m)","Phi.Mn (kN.m)"],
             "Nilai": [
                 f"{R['beta1']:.4f}", f"{R['a']:.2f}", f"{R['c']:.2f}",
                 f"{R['et']:.5f}", f"{R['phi']:.4f}", f"{R['rho']*100:.4f}",
                 f"{R['rho_min']*100:.4f}", f"{R['rho_max']*100:.4f}",
                 f"{R['Mn']:.3f}", f"{R['phiMn']:.3f}",
             ],
-            "Status": ["—","—","—", et_s,"—", rh_s,"—","—","—","—"],
+            "Status": ["-","-","-", et_s,"-", rh_s,"-","-","-","-"],
         })
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # ════════════════════════════════════════════════════
-        # TOMBOL DOWNLOAD — WORD & PDF BERDAMPINGAN
-        # ════════════════════════════════════════════════════
+        # -- Download -----------------------------------------
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("### 📄 Download Laporan")
-
-        nama_file_base = (
-            f"Laporan_Lentur_Balok_fc{int(fc)}_fy{int(fy)}_b{int(b)}x{int(h)}"
-        )
-
-        word_buf = create_word(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek)
-        pdf_buf  = create_pdf(fc, fy, b, h, d, As, Asp, R, steps, nama_proyek)
-
-        dl_word, dl_pdf = st.columns(2)
-        with dl_word:
+        st.markdown("### Download Laporan")
+        nama_f = st.session_state.balok_nama_file
+        dl_w, dl_p = st.columns(2)
+        with dl_w:
             st.download_button(
-                label="⬇️  Download Laporan Word (.docx)",
-                data=word_buf,
-                file_name=f"{nama_file_base}.docx",
+                label="Download Laporan Word (.docx)",
+                data=st.session_state.balok_word,
+                file_name=f"{nama_f}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
-                help="Format natural, siap diedit di Microsoft Word.",
+                key="balok_dl_word",
             )
-        with dl_pdf:
+        with dl_p:
             st.download_button(
-                label="⬇️  Download Laporan PDF (.pdf)",
-                data=pdf_buf,
-                file_name=f"{nama_file_base}.pdf",
+                label="Download Laporan PDF (.pdf)",
+                data=st.session_state.balok_pdf,
+                file_name=f"{nama_f}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
-                help="Layout formal dengan watermark. Siap cetak atau kirim ke klien.",
+                key="balok_dl_pdf",
             )
         st.caption(
-            "File Word dapat diedit lebih lanjut.  "
+            "File Word dapat diedit lebih lanjut. "
             "File PDF sudah dilengkapi watermark dan siap untuk laporan resmi."
         )
 
-    else:
-        st.info("👈  Isi data di panel kiri, lalu klik **HITUNG KAPASITAS LENTUR**")
-        st.markdown("""
-        **Yang akan dihitung secara runtut:**
-        1. Faktor β₁ (blok tegangan Whitney)
-        2. Gaya tarik tulangan T
-        3. Kedalaman blok tegangan **a**
-        4. Kedalaman sumbu netral **c**
-        5. Rasio tulangan aktual ρ
-        6. Batas ρ_min (SNI Pasal 9.6.1.2)
-        7. Batas ρ_max (0.75 ρ_bal)
-        8. Regangan tarik εt
-        9. Faktor reduksi φ
-        10. Momen nominal **Mn** dan momen rencana **φMn**
-
-        **Output tersedia dalam dua format:**
-        - 📝 Word (.docx) — format natural, bisa diedit
-        - 📋 PDF (.pdf)  — formal + watermark LADOSI ENGINEERING
-        """)
-
-# ── Footer ────────────────────────────────────────────────
+# -- Footer -------------------------------------------------
 st.markdown('<hr class="divider">', unsafe_allow_html=True)
 st.markdown(
     "<p style='text-align:center;font-size:.75rem;color:#aaa'>"
