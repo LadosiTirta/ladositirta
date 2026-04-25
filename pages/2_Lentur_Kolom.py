@@ -781,9 +781,38 @@ def create_pdf_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
 
 
 # ============================================================
+
+# ============================================================
+# HELPER SESSION STATE
+# ============================================================
+def _init_state_kolom():
+    defaults = {
+        "kolom_hasil":       None,
+        "kolom_steps":       None,
+        "kolom_word":        None,
+        "kolom_pdf":         None,
+        "kolom_last_inputs": {},
+        "kolom_nama_file":   "",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+def _snap_kolom(nama, fc, fy, b, h, cover, D_tul, n_total, n_b, n_h):
+    return dict(nama=nama, fc=fc, fy=fy, b=b, h=h, cover=cover,
+                D_tul=D_tul, n_total=n_total, n_b=n_b, n_h=n_h)
+
+def _changed_kolom(snap_now):
+    last = st.session_state.kolom_last_inputs
+    if not last:
+        return False
+    return any(snap_now.get(k) != last.get(k) for k in snap_now)
+
 # UI - HEADER
 # ============================================================
-st.markdown('<p class="main-title"> Kapasitas Aksial & Lentur Kolom Beton Bertulang</p>',
+_init_state_kolom()
+
+st.markdown('<p class="main-title">Kapasitas Aksial & Lentur Kolom Beton Bertulang</p>',
             unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-title">Referensi: SNI 2847:2019 (setara ACI 318-14) '
@@ -874,8 +903,9 @@ with col_inp:
         st.warning(" Jumlah tulangan minimum untuk kolom adalah 4 batang.")
 
     st.markdown("")
-    tombol = st.button(" HITUNG KAPASITAS KOLOM",
-                       use_container_width=True, type="primary")
+    tombol = st.button("HITUNG KAPASITAS KOLOM",
+                       use_container_width=True, type="primary",
+                       key="kolom_btn")
 
     with st.expander(" Tabel luas tulangan (mm2)"):
         st.markdown("""
@@ -894,20 +924,65 @@ with col_inp:
 # ============================================================
 # UI - HASIL
 # ============================================================
-with col_out:
-    if tombol:
-        # Validasi
-        if n_total < 4:
-            st.error(" Jumlah tulangan minimum adalah 4 batang!"); st.stop()
-        if cover >= h / 2 or cover >= b / 2:
-            st.error(" Selimut terlalu besar relatif terhadap dimensi kolom!"); st.stop()
 
+# === Proses tombol Hitung ===
+if tombol:
+    if n_total < 4:
+        st.error("Jumlah tulangan minimum adalah 4 batang!")
+    elif cover >= h / 2 or cover >= b / 2:
+        st.error("Selimut terlalu besar relatif terhadap dimensi kolom!")
+    else:
+        snap  = _snap_kolom(nama_proyek, fc, fy, b, h, cover, D_tul, n_total, n_b, n_h)
         R     = hitung_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h)
         steps = buat_steps_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h, R)
+        w_buf = create_word_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
+                                  R, steps, nama_proyek)
+        p_buf = create_pdf_kolom(fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
+                                 R, steps, nama_proyek)
+        st.session_state.kolom_hasil       = R
+        st.session_state.kolom_steps       = steps
+        st.session_state.kolom_word        = w_buf.getvalue()
+        st.session_state.kolom_pdf         = p_buf.getvalue()
+        st.session_state.kolom_last_inputs = snap
+        st.session_state.kolom_nama_file   = (
+            f"Laporan_Kolom_fc{int(fc)}_fy{int(fy)}"
+            f"_b{int(b)}x{int(h)}_n{n_total}D{int(D_tul)}"
+        )
 
-        # -- Metrik Utama -------------------------------------
-        st.markdown("###  Hasil Utama")
+# === Tampilkan Hasil ===
+with col_out:
+    if st.session_state.kolom_hasil is None:
+        st.info("Isi data di panel kiri, lalu klik HITUNG KAPASITAS KOLOM")
+        st.markdown("""
+        **Yang akan dihitung (Kolom Pendek, Simetris 4 Sisi):**
+        1. Faktor Beta-1 (blok tegangan Whitney)
+        2. Data tulangan longitudinal dan Ast
+        3. Rasio tulangan Rho-g (kontrol 1%-8%)
+        4. Kapasitas aksial murni Pn0 dan Phi.Pn,max
+        5. Kapasitas lentur murni Mn0 dan Phi.Mn0
+        6. Kondisi balanced: Pb, Mb, Phi.Pb, Phi.Mb
+        7. Tiga titik kontrol diagram interaksi (P-M)
 
+        **Output:**
+        - Word (.docx) - format natural, bisa diedit
+        - PDF (.pdf) - formal + watermark LADOSI ENGINEERING
+        """)
+    else:
+        R     = st.session_state.kolom_hasil
+        steps = st.session_state.kolom_steps
+
+        # Soft Warning
+        snap_now = _snap_kolom(nama_proyek, fc, fy, b, h, cover, D_tul, n_total, n_b, n_h)
+        if _changed_kolom(snap_now):
+            st.warning(
+                "Perhatian: Data input telah diubah. "
+                "Hasil ringkasan dan file laporan di bawah ini masih menggunakan "
+                "data perhitungan sebelumnya. Silakan klik tombol HITUNG kembali "
+                "untuk memperbarui laporan."
+            )
+
+        # Metrik Utama
+        st.markdown("### Hasil Utama")
         m1, m2, m3 = st.columns(3)
         for col, lbl, val, unt in [
             (m1, "Phi.Pn,max (Aksial Maks)", f"{R['phiPn_max']:.1f}", "kN"),
@@ -916,66 +991,62 @@ with col_out:
         ]:
             with col:
                 st.markdown(
-                    f'<div class="metric-card">'
-                    f'<div class="metric-lbl">{lbl}</div>'
-                    f'<div class="metric-val">{val}</div>'
-                    f'<div class="metric-unt">{unt}</div>'
-                    f'</div>', unsafe_allow_html=True)
+                    f'''<div class="metric-card">
+                    <div class="metric-lbl">{lbl}</div>
+                    <div class="metric-val">{val}</div>
+                    <div class="metric-unt">{unt}</div></div>''',
+                    unsafe_allow_html=True)
 
         m4, m5, m6 = st.columns(3)
         for col, lbl, val, unt in [
-            (m4, "Phi.Pb (Aksial Balanced)",  f"{R['phiPb']:.1f}",    "kN"),
-            (m5, "Phi.Mb (Lentur Balanced)",  f"{R['phiMb']:.2f}",    "kN.m"),
-            (m6, "Ast Total",                  f"{R['Ast']:.0f}",      "mm2"),
+            (m4, "Phi.Pb (Aksial Balanced)", f"{R['phiPb']:.1f}",  "kN"),
+            (m5, "Phi.Mb (Lentur Balanced)", f"{R['phiMb']:.2f}",  "kN.m"),
+            (m6, "Ast Total",                 f"{R['Ast']:.0f}",    "mm2"),
         ]:
             with col:
                 st.markdown(
-                    f'<div class="metric-card">'
-                    f'<div class="metric-lbl">{lbl}</div>'
-                    f'<div class="metric-val">{val}</div>'
-                    f'<div class="metric-unt">{unt}</div>'
-                    f'</div>', unsafe_allow_html=True)
+                    f'''<div class="metric-card">
+                    <div class="metric-lbl">{lbl}</div>
+                    <div class="metric-val">{val}</div>
+                    <div class="metric-unt">{unt}</div></div>''',
+                    unsafe_allow_html=True)
         st.markdown("")
 
-        # -- Status Rasio Tulangan -----------------------------
+        # Status
         if R["ok_rho"]:
             st.markdown(
-                '<div class="result-ok">[OK] RASIO TULANGAN OK - '
-                f'Rho-g = {R["rho_g"]*100:.4f}% memenuhi syarat 1% s/d 8% (SNI 2847:2019)</div>',
+                f'''<div class="result-ok">[OK] RASIO TULANGAN OK - Rho-g = {R["rho_g"]*100:.4f}% memenuhi syarat 1% s/d 8%</div>''',
                 unsafe_allow_html=True)
         else:
             msg = ("Rho-g terlalu kecil (< 1%) - tambah tulangan"
                    if R["rho_g"] < 0.01 else
-                   "Rho-g terlalu besar (> 8%) - kurangi tulangan atau perbesar penampang")
-            st.markdown(
-                f'<div class="result-fail">[X] RASIO TULANGAN TIDAK OK - {msg}</div>',
-                unsafe_allow_html=True)
+                   "Rho-g terlalu besar (> 8%) - kurangi tulangan / perbesar penampang")
+            st.markdown(f'<div class="result-fail">[X] RASIO TULANGAN TIDAK OK - {msg}</div>',
+                        unsafe_allow_html=True)
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-        # -- Diagram Interaksi (tabel 3 titik) ----------------
-        st.markdown("###  Titik Kontrol Diagram Interaksi")
+        # Diagram Interaksi
+        st.markdown("### Titik Kontrol Diagram Interaksi")
+        import pandas as pd
         df_di = pd.DataFrame({
-            "Titik": ["A - Aksial Murni", "B - Balanced", "C - Lentur Murni"],
-            "Pn (kN)":    [f"{R['Pn0']:.2f}", f"{R['Pb']:.2f}", "0"],
-            "Mn (kN.m)":  ["0", f"{R['Mb']:.3f}", f"{R['Mn0']:.3f}"],
-            "Phi":        [f"{R['phi_c']}", f"{R['phi_b']}", f"{R['phi_f']:.4f}"],
-            "Phi.Pn (kN)": [f"{R['phiPn_max']:.2f}", f"{R['phiPb']:.2f}", "0"],
-            "Phi.Mn (kN.m)":["0", f"{R['phiMb']:.3f}", f"{R['phiMn0']:.3f}"],
+            "Titik":         ["A - Aksial Murni", "B - Balanced", "C - Lentur Murni"],
+            "Pn (kN)":       [f"{R['Pn0']:.2f}",  f"{R['Pb']:.2f}", "0"],
+            "Mn (kN.m)":     ["0", f"{R['Mb']:.3f}", f"{R['Mn0']:.3f}"],
+            "Phi":           [f"{R['phi_c']}", f"{R['phi_b']}", f"{R['phi_f']:.4f}"],
+            "Phi.Pn (kN)":   [f"{R['phiPn_max']:.2f}", f"{R['phiPb']:.2f}", "0"],
+            "Phi.Mn (kN.m)": ["0", f"{R['phiMb']:.3f}", f"{R['phiMn0']:.3f}"],
         })
         st.dataframe(df_di, use_container_width=True, hide_index=True)
-        st.caption(
-            "Titik (Pu, Mu) dari analisa struktur harus berada **di dalam** kurva "
-            "yang menghubungkan ketiga titik di atas agar penampang aman."
-        )
+        st.caption("Titik (Pu, Mu) harus berada di dalam kurva diagram interaksi agar penampang aman.")
 
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-        # -- Langkah Perhitungan -------------------------------
-        st.markdown("###  Urutan Perhitungan")
+        # Langkah Perhitungan
+        st.markdown("### Urutan Perhitungan")
         for s in steps:
             warna = "#2e7d32" if s["ok"] else "#c62828"
-            tanda = "v" if s["ok"] else "x"
+            tanda = "[OK]" if s["ok"] else "[X]"
             st.markdown(
                 f'<div class="step-box" style="border-left-color:{warna}">'
                 f'<div class="ref-badge">{s["ref"]}</div><br>'
@@ -984,95 +1055,54 @@ with col_out:
                 f'font-family:monospace">{s["isi"]}</pre></div>',
                 unsafe_allow_html=True)
 
-        # -- Tabel Rangkuman -----------------------------------
+        # Tabel Rangkuman
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("###  Tabel Rangkuman")
+        st.markdown("### Tabel Rangkuman")
         rho_s = "[OK] OK" if R["ok_rho"] else "[X] Tidak OK"
         df_rng = pd.DataFrame({
             "Parameter": [
-                "Beta-1", "Ag (mm2)", "Ast (mm2)", "Rho-g (%)",
-                "Pn0 (kN)", "Phi.Pn,max (kN)",
-                "Mn0 (kN.m)", "Phi.Mn0 (kN.m)",
-                "Pb (kN)", "Mb (kN.m)", "Phi.Pb (kN)", "Phi.Mb (kN.m)",
+                "Beta-1","Ag (mm2)","Ast (mm2)","Rho-g (%)",
+                "Pn0 (kN)","Phi.Pn,max (kN)","Mn0 (kN.m)","Phi.Mn0 (kN.m)",
+                "Pb (kN)","Mb (kN.m)","Phi.Pb (kN)","Phi.Mb (kN.m)",
             ],
             "Nilai": [
-                f"{R['beta1']:.4f}",
-                f"{R['Ag']:.0f}",
-                f"{R['Ast']:.2f}",
-                f"{R['rho_g']*100:.4f}",
-                f"{R['Pn0']:.2f}",
-                f"{R['phiPn_max']:.2f}",
-                f"{R['Mn0']:.3f}",
-                f"{R['phiMn0']:.3f}",
-                f"{R['Pb']:.2f}",
-                f"{R['Mb']:.3f}",
-                f"{R['phiPb']:.2f}",
-                f"{R['phiMb']:.3f}",
+                f"{R['beta1']:.4f}", f"{R['Ag']:.0f}", f"{R['Ast']:.2f}",
+                f"{R['rho_g']*100:.4f}", f"{R['Pn0']:.2f}", f"{R['phiPn_max']:.2f}",
+                f"{R['Mn0']:.3f}", f"{R['phiMn0']:.3f}",
+                f"{R['Pb']:.2f}", f"{R['Mb']:.3f}",
+                f"{R['phiPb']:.2f}", f"{R['phiMb']:.3f}",
             ],
-            "Status": [
-                "-", "-", "-", rho_s,
-                "-", "-", "-", "-",
-                "-", "-", "-", "-",
-            ],
+            "Status": ["-","-","-", rho_s, "-","-","-","-", "-","-","-","-"],
         })
         st.dataframe(df_rng, use_container_width=True, hide_index=True)
 
-        # ====================================================
-        # TOMBOL DOWNLOAD
-        # ====================================================
+        # Download
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
-        st.markdown("###  Download Laporan")
-
-        nama_base = (f"Laporan_Kolom_fc{int(fc)}_fy{int(fy)}"
-                     f"_b{int(b)}x{int(h)}_n{n_total}D{int(D_tul)}")
-
-        word_buf = create_word_kolom(
-            fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
-            R, steps, nama_proyek)
-        pdf_buf  = create_pdf_kolom(
-            fc, fy, b, h, cover, D_tul, n_total, n_b, n_h,
-            R, steps, nama_proyek)
-
+        st.markdown("### Download Laporan")
+        nama_f = st.session_state.kolom_nama_file
         dl_w, dl_p = st.columns(2)
         with dl_w:
             st.download_button(
-                label="  Download Laporan Word (.docx)",
-                data=word_buf,
-                file_name=f"{nama_base}.docx",
+                label="Download Laporan Word (.docx)",
+                data=st.session_state.kolom_word,
+                file_name=f"{nama_f}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
-                help="Format natural, siap diedit di Microsoft Word.",
+                key="kolom_dl_word",
             )
         with dl_p:
             st.download_button(
-                label="  Download Laporan PDF (.pdf)",
-                data=pdf_buf,
-                file_name=f"{nama_base}.pdf",
+                label="Download Laporan PDF (.pdf)",
+                data=st.session_state.kolom_pdf,
+                file_name=f"{nama_f}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
-                help="Layout formal dengan watermark LADOSI ENGINEERING.",
+                key="kolom_dl_pdf",
             )
         st.caption(
             "File Word dapat diedit lebih lanjut. "
             "File PDF sudah dilengkapi watermark dan siap untuk laporan resmi."
         )
-
-    else:
-        st.info("  Isi data di panel kiri, lalu klik **HITUNG KAPASITAS KOLOM**")
-        st.markdown("""
-        **Yang akan dihitung (Kolom Pendek, Simetris 4 Sisi):**
-        1. Faktor Beta1 (blok tegangan Whitney)
-        2. Data tulangan longitudinal dan Ast
-        3. Rasio tulangan longitudinal Rho-g (kontrol 1%-8%)
-        4. Kapasitas aksial murni Pn0 dan Phi.Pn,max
-        5. Kapasitas lentur murni Mn0 dan Phi.Mn0
-        6. Kondisi balanced: Pb, Mb, Phi.Pb, Phi.Mb
-        7. Tiga titik kontrol diagram interaksi (P-M)
-
-        **Output tersedia dalam dua format:**
-        -  Word (.docx) - format natural, bisa diedit
-        -  PDF (.pdf)  - formal + watermark LADOSI ENGINEERING
-        """)
 
 # Footer
 st.markdown('<hr class="divider">', unsafe_allow_html=True)
