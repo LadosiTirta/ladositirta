@@ -940,7 +940,7 @@ _ss["lb_ps_message"] = _dev["message"]
 # Load diagrams
 _SW_HCS     = _ss.get("SW_HCS",
                        _ss["wc"] * (_ss["b_bottom"] * _ss["h"]
-                                    - _ss["A_voids_total"])
+                                    - _ss.get("A_voids_total", 0.0))
                        / (_ss["b_bottom"] * 1e6))
 _SW_topping = _ss.get("SW_topping",
                        _ss["wc_top"] * _ss["b_nominal"] * _ss["t_topping"]
