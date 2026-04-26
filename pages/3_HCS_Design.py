@@ -1,4 +1,4 @@
-    # =============================================================================
+# =============================================================================
 # HCS DESIGN APP — Phase 1A: Input UI & Session State
 # =============================================================================
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
@@ -318,6 +318,24 @@ def init_session_state():
         "cover_bot":   35,
         "cover_top":   30,
         "fpi_pct":     75.0,
+        # Derived prestress defaults (overwritten by Tab C on first render)
+        "fpu":         1618.0,
+        "fpy":         1432.0,
+        "Eps":         199050.0,
+        "ps_area":     19.6,
+        "fpi":         1213.5,   # 75% × 1618
+        "Aps_bot":     196.0,    # 10 × 19.6
+        "Aps_top":     0.0,
+        "dp_bot":      165.0,    # 200 − 35
+        "dp_top":      30.0,
+        "Pi":          237.8,    # Aps_bot × fpi / 1000
+
+        # ── Auto-calc defaults (overwritten by tab logic on first render) ──
+        "SW_HCS":      3.5,      # approximate kN/m² for HCS 200mm
+        "SW_topping":  1.44,     # 24 × 0.060 kN/m²
+        "L_clear":     5850.0,   # 6000 − 75 − 75
+        "L_an":        5850.0,
+        "bear_min":    50.8,     # 2 inches minimum
 
         # ── D. Span ──
         "L_cc":        6000,
@@ -890,8 +908,10 @@ _ss = st.session_state
 
 # Retrieve fpi, Aps_bot from session (computed in Tab C logic below).
 # Use .get() with sensible defaults in case Tab C hasn't rendered yet.
-_fpi     = _ss.get("fpi",     _ss["fpu"] * _ss["fpi_pct"] / 100.0)
-_Aps_bot = _ss.get("Aps_bot", _ss["n_bot"] * _ss["ps_area"])  # noqa: unused but stored
+_fpu_def     = _ss.get("fpu", 1618.0)
+_fpi_pct_def = _ss.get("fpi_pct", 75.0)
+_fpi         = _ss.get("fpi", _fpu_def * _fpi_pct_def / 100.0)
+_Aps_bot = _ss.get("Aps_bot", _ss.get("n_bot", 10) * _ss.get("ps_area", 19.6))
 
 # Transfer & development length
 _d_ps_mm = get_ps_diameter_mm()
