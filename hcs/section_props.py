@@ -1,207 +1,478 @@
 """
-HCS Design — Section Properties (Phase 2)
-==========================================
+HCS Design — Section Properties
+=================================
 Reference : ACI/PCI CODE-319-25 Cl. 26.12
-            PCI Design Handbook, 8th Edition Sec. 2.2 & 4.2.3
+            PCI Design Handbook, 8th Edition Sec. 2.2 & 2.2.3 & 4.2.3
 Units     : SI only (mm, mm², mm³, mm⁴)
-
-Functions
----------
-calc_section_properties : Gross / Net HCS / Composite section properties
 
 Coordinate System
 -----------------
 y measured upward from the BOTTOM face of HCS (excluding topping).
 
-Simplification (per PCI practice, >97% accuracy)
--------------------------------------------------
-Section modelled as rectangular b_top × h.
-Voids subtracted at centroid y_void_c = tf_bot + h_core/2.
-Transformed steel uses (n−1)·Aps method.
+Simplification (per PCI practice, accuracy >97%)
+--------------------------------------------------
+HCS modelled as rectangular b_top × h.
+Voids subtracted at their geometric centroids via the parallel-axis theorem.
+Composite topping is transformed to equivalent HCS concrete.
+
+Functions
+---------
+calc_net_section       : Gross + Net HCS section (no topping, no transformed steel)
+calc_composite_section : Composite section (HCS + transformed topping)
+calc_ps_eccentricity   : Eccentricity of prestressing force from centroid
+get_all_section_props  : Master function — reads session_state dict, returns
+                         combined dict ready to store with prefix 'sp_'
 """
 
 import math
 
 
-def calc_section_properties(
-        # Geometry
-        b_top: float, b_bottom: float, h: float,
-        tf_top: float, tf_bot: float,
-        hcs_type: str,
-        # Voids
-        core_shape: str, d_core: float, n_core: int,
-        h_straight: float, h_taper: float,
-        A_core_1: float, A_voids_total: float, h_core: float,
-        # Topping
-        has_topping: bool, t_topping: float, b_nominal: float,
-        n_mod: float,
-        # Prestress
-        Aps_bot: float, Aps_top: float,
-        dp_bot: float, dp_top: float,
-        n_ps: float,          # modular ratio Eps / Ec_hcs
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helper: moment of inertia of one void about its OWN centroid
+# ─────────────────────────────────────────────────────────────────────────────
+def _I_void_own(core_shape: str, d_core: float,
+                h_straight: float, h_taper: float) -> float:
+    """
+    Moment of inertia of ONE core void about its own centroidal axis.
+
+    Circular  : I = π·d⁴/64
+                Full circle about its own CG.
+
+    Capsule   : I = π·d⁴/64  +  d·h_str³/12
+                Circle part (π·d⁴/64) + rectangular mid-segment (d·h_str³/12).
+                Both sub-parts share the same void CG for a symmetric layout;
+                the parallel-axis shift to the section NA is applied in
+                calc_net_section via d_void.
+
+    Teardrop  : I = π·d⁴/128  +  d·h_tap³/36
+                Semicircle top (π·d⁴/128 about semicircle's own NA) +
+                Triangle taper (bh³/36 for a triangle, b=d, h=h_taper,
+                about the triangle's own CG).
+
+    Ref: PCI Design Handbook 8th Ed. Sec. 2.2  |  standard geometric formulas
+    """
+    if core_shape == "Circular":
+        return math.pi / 64.0 * d_core ** 4
+
+    elif core_shape == "Capsule":
+        I_circle = math.pi / 64.0 * d_core ** 4
+        I_rect   = d_core * h_straight ** 3 / 12.0
+        return I_circle + I_rect
+
+    else:  # Teardrop
+        I_semicircle = math.pi / 128.0 * d_core ** 4   # semicircle about own NA
+        I_triangle   = d_core * h_taper ** 3 / 36.0    # bh³/36
+        return I_semicircle + I_triangle
+
+
+# =============================================================================
+# 1. GROSS + NET SECTION
+# =============================================================================
+def calc_net_section(
+        b_top        : float,
+        h            : float,
+        tf_bot       : float,
+        core_shape   : str,
+        d_core       : float,
+        n_core       : int,
+        h_straight   : float,
+        h_taper      : float,
+        A_core_1     : float,
+        A_voids_total: float,
+        h_core       : float,
 ) -> dict:
     """
-    Calculate HCS section properties for three conditions:
+    Net section properties of HCS alone (no topping, no transformed steel).
+    Ref: PCI Design Handbook 8th Ed. Sec. 2.2
 
-    1. Gross HCS section   — rectangular b_top × h, no voids, no steel
-       Ref: ACI/PCI 319-25 Cl. 26.12.1
+    Method: rectangular simplification using b_top
+    ------------------------------------------------
+    Gross
+        Ag   = b_top × h
+        yb_g = h / 2   (symmetric rectangle)
+        Ig   = b_top × h³ / 12
 
-    2. Net HCS section     — voids subtracted + transformed prestress steel
-       Step A: A_net_conc = b_top×h − A_voids_total
-               y_void_c   = tf_bot + h_core/2   (void zone centroid)
-       Step B: Add (n_ps−1)·Aps at dp_bot / dp_top via parallel-axis
-               (n−1 method: concrete at steel location already in gross)
-       Step C: Moments of inertia via parallel-axis theorem
-       Ref: PCI Design Handbook 8th Ed. Sec. 2.2.1
+    Net (subtract voids)
+        y_void_c = tf_bot + h_core / 2       (void zone centroid from bottom)
+        An  = Ag − A_voids_total
+        yb  = (Ag × h/2  −  A_voids_total × y_void_c) / An
+              (composite-area method; for perfectly symmetric cores this gives
+               yb ≈ h/2, but asymmetric flanges shift it slightly — full formula
+               is always used for correctness)
 
-    3. Composite section   — net HCS + transformed topping
-       Topping CG above HCS top: y_top_c = h + t_topping/2
-       Transformed width: b_top_tr = b_nominal / n_mod
-       Ref: PCI Design Handbook 8th Ed. Sec. 4.2.3
+        I_gross_shifted = Ig + Ag × (h/2 − yb)²      about new NA
+        I_void_1 = _I_void_own()                       about void's own CG
+        d_void   = y_void_c − yb                       parallel-axis distance
+        I_voids  = n_core × (I_void_1 + A_core_1 × d_void²)
+        In  = I_gross_shifted − I_voids
+
+    Section moduli
+        Sb = In / yb          bottom fibre
+        St = In / (h − yb)    top fibre
+
+    Kern points  (ACI/PCI 319-25 Cl. 24.5.2 / PCI Handbook Sec. 2.2)
+        kb = In / (An × yb)      lower kern from bottom
+        kt = In / (An × yt)      upper kern from top
+
+    r² = In / An              radius of gyration squared
 
     Parameters
     ----------
-    All lengths in mm, areas in mm², modular ratios dimensionless.
+    b_top, h, tf_bot      : geometry (mm)
+    core_shape            : "Circular" | "Capsule" | "Teardrop"
+    d_core, h_straight, h_taper : core dimensions (mm)
+    n_core                : number of cores
+    A_core_1              : area of one core (mm²)
+    A_voids_total         : n_core × A_core_1 (mm²)
+    h_core                : total height of one core (mm)
 
     Returns
     -------
-    dict — see keys listed in return statement below.
+    dict — keys: Ag, yb_g, yt_g, Ig, Sb_g, St_g  (gross)
+                 An, yb, yt, In, Sb, St, kb, kt, r2 (net)
+                 y_void_c                             (helper for Phase 3/4)
     """
-    # ─────────────────────────────────────────────────────────────────────────
-    # 1. GROSS SECTION (rectangular b_top × h, ignore voids & steel)
-    #    Ref: ACI/PCI 319-25 Cl. 26.12.1
-    # ─────────────────────────────────────────────────────────────────────────
-    A_gross   = b_top * h                              # mm²
-    yb_gross  = h / 2.0                                # mm — CG from bottom
-    yt_gross  = h - yb_gross                           # mm — CG from top
-    I_gross   = b_top * h ** 3 / 12.0                 # mm⁴
-    Sb_gross  = I_gross / yb_gross                     # mm³ — section modulus bottom
-    St_gross  = I_gross / yt_gross                     # mm³ — section modulus top
+    # ── Gross section ──────────────────────────────────────────────────────────
+    Ag   = b_top * h
+    yb_g = h / 2.0
+    yt_g = h - yb_g
+    Ig   = b_top * h ** 3 / 12.0
+    Sb_g = Ig / yb_g
+    St_g = Ig / yt_g
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 2. NET HCS SECTION (subtract voids, add transformed steel)
-    #    Ref: PCI Design Handbook 8th Ed. Sec. 2.2.1
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── Void centroid from bottom ──────────────────────────────────────────────
+    y_void_c = tf_bot + h_core / 2.0
 
-    # Void centroid (from bottom of HCS)
-    y_void_c = tf_bot + h_core / 2.0                  # mm
+    # ── Net area and centroid ─────────────────────────────────────────────────
+    An  = Ag - A_voids_total
+    yb  = (Ag * (h / 2.0) - A_voids_total * y_void_c) / An
+    yt  = h - yb
 
-    # Concrete-only net area and centroid
-    A_net_conc  = b_top * h - A_voids_total            # mm²
-    yb_net_conc = (b_top * h * (h / 2.0) - A_voids_total * y_void_c) / A_net_conc  # mm
+    # ── Net inertia ───────────────────────────────────────────────────────────
+    I_gross_shifted = Ig + Ag * (h / 2.0 - yb) ** 2
+    I_v1    = _I_void_own(core_shape, d_core, h_straight, h_taper)
+    d_void  = y_void_c - yb
+    I_voids = n_core * (I_v1 + A_core_1 * d_void ** 2)
+    In      = I_gross_shifted - I_voids
 
-    # Transformed steel additions (n-1)*Aps — parallel axis
-    dA_bot = (n_ps - 1.0) * Aps_bot                   # mm²
-    dA_top = (n_ps - 1.0) * Aps_top                   # mm²
+    # ── Section moduli ────────────────────────────────────────────────────────
+    Sb = In / yb
+    St = In / yt
 
-    A_net = A_net_conc + dA_bot + dA_top               # mm²
-    yb_net = (A_net_conc * yb_net_conc
-              + dA_bot   * dp_bot
-              + dA_top   * dp_top) / A_net             # mm from bottom
-    yt_net = h - yb_net                                # mm from top
+    # ── Kern points ───────────────────────────────────────────────────────────
+    kb = In / (An * yb)
+    kt = In / (An * yt)
 
-    # Moment of inertia — net section
-    I_rect  = b_top * h ** 3 / 12.0
-    d_rect  = (h / 2.0) - yb_net
-    I_hcs_shifted = I_rect + b_top * h * d_rect ** 2
-
-    # Subtract voids (parallel-axis theorem for each void shape)
-    if core_shape == "Circular":
-        I_void_own = math.pi / 64.0 * d_core ** 4
-    elif core_shape == "Capsule":
-        I_circ  = math.pi / 64.0 * d_core ** 4
-        I_rect_ = d_core * h_straight ** 3 / 12.0
-        I_void_own = I_circ + I_rect_
-    else:  # Teardrop — semicircle top + triangle
-        I_circ = math.pi / 128.0 * d_core ** 4        # semicircle about own NA
-        I_tri  = d_core * h_taper ** 3 / 36.0
-        I_void_own = I_circ + I_tri
-
-    d_void = y_void_c - yb_net                        # distance void CG to section NA
-    I_voids_total = n_core * (I_void_own + A_core_1 * d_void ** 2)
-
-    # Steel contribution to I
-    I_steel_bot = (n_ps - 1.0) * Aps_bot * (dp_bot - yb_net) ** 2
-    I_steel_top = (n_ps - 1.0) * Aps_top * (dp_top - yb_net) ** 2
-
-    I_net  = I_hcs_shifted - I_voids_total + I_steel_bot + I_steel_top
-    Sb_net = I_net / yb_net                            # mm³
-    St_net = I_net / yt_net                            # mm³
-    r2_net = I_net / A_net                             # radius of gyration squared (mm²)
-    e_bot  = dp_bot - yb_net                           # eccentricity bottom tendons (mm)
-    e_top  = dp_top - yb_net if Aps_top > 0 else 0.0
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 3. COMPOSITE SECTION (net HCS + transformed topping)
-    #    Topping CG above HCS top → y_top_c = h + t_topping/2 from HCS bottom
-    #    Transformed topping width = b_nominal / n_mod
-    #    Ref: PCI Design Handbook 8th Ed. Sec. 4.2.3
-    # ─────────────────────────────────────────────────────────────────────────
-    if has_topping and t_topping > 0:
-        b_top_tr   = b_nominal / n_mod                 # transformed topping width (mm)
-        A_top_tr   = b_top_tr * t_topping              # mm²
-        y_top_c    = h + t_topping / 2.0               # mm from bottom of HCS
-
-        A_comp     = A_net + A_top_tr                  # mm²
-        yb_comp    = (A_net * yb_net + A_top_tr * y_top_c) / A_comp   # mm from bottom HCS
-        yt_comp    = h + t_topping - yb_comp           # mm from top of topping to NA
-
-        # I composite — parallel-axis
-        d_net_comp = yb_net - yb_comp
-        d_top_comp = y_top_c - yb_comp
-        I_top_own  = b_top_tr * t_topping ** 3 / 12.0
-        I_comp     = (I_net + A_net * d_net_comp ** 2
-                      + I_top_own + A_top_tr * d_top_comp ** 2)
-
-        Sbc_comp   = I_comp / yb_comp                  # mm³ — bottom HCS
-        Stc_comp   = I_comp / yt_comp                  # mm³ — top of topping
-        yt_hcs_comp = h - yb_comp                      # +ve means NA is below HCS top
-        Stc_hcs    = I_comp / abs(yt_hcs_comp) if abs(yt_hcs_comp) > 1e-3 else 0.0
-
-        h_total    = h + t_topping                     # mm
-    else:
-        # No topping — composite = net section
-        A_comp     = A_net
-        yb_comp    = yb_net
-        yt_comp    = yt_net
-        I_comp     = I_net
-        Sbc_comp   = Sb_net
-        Stc_comp   = St_net
-        Stc_hcs    = St_net
-        h_total    = h
-        A_top_tr   = 0.0
-        b_top_tr   = 0.0
+    # ── Radius of gyration squared ────────────────────────────────────────────
+    r2 = In / An
 
     return {
         # Gross
-        "A_gross"   : A_gross,
-        "yb_gross"  : yb_gross,
-        "yt_gross"  : yt_gross,
-        "I_gross"   : I_gross,
-        "Sb_gross"  : Sb_gross,
-        "St_gross"  : St_gross,
-        # Net HCS
-        "A_net"     : A_net,
-        "yb_net"    : yb_net,
-        "yt_net"    : yt_net,
-        "I_net"     : I_net,
-        "Sb_net"    : Sb_net,
-        "St_net"    : St_net,
-        "r2_net"    : r2_net,
-        "e_bot"     : e_bot,
-        "e_top"     : e_top,
-        "y_void_c"  : y_void_c,
-        # Composite
-        "A_comp"    : A_comp,
-        "yb_comp"   : yb_comp,
-        "yt_comp"   : yt_comp,
-        "I_comp"    : I_comp,
-        "Sbc_comp"  : Sbc_comp,
-        "Stc_comp"  : Stc_comp,
-        "Stc_hcs"   : Stc_hcs,
-        "h_total"   : h_total,
-        # Helpers
-        "A_net_conc": A_net_conc,
-        "A_top_tr"  : A_top_tr,
-        "b_top_tr"  : b_top_tr,
+        "Ag"      : Ag,
+        "yb_g"    : yb_g,
+        "yt_g"    : yt_g,
+        "Ig"      : Ig,
+        "Sb_g"    : Sb_g,
+        "St_g"    : St_g,
+        # Net
+        "An"      : An,
+        "yb"      : yb,
+        "yt"      : yt,
+        "In"      : In,
+        "Sb"      : Sb,
+        "St"      : St,
+        "kb"      : kb,
+        "kt"      : kt,
+        "r2"      : r2,
+        # Helper
+        "y_void_c": y_void_c,
     }
+
+
+# =============================================================================
+# 2. COMPOSITE SECTION  (HCS + topping)
+# =============================================================================
+def calc_composite_section(
+        net_props : dict,
+        b_top     : float,
+        h         : float,
+        t_topping : float,
+        n_mod     : float,
+        hcs_type  : str,
+) -> dict:
+    """
+    Composite section properties: HCS + structural topping.
+    Ref: PCI Design Handbook 8th Ed. Sec. 2.2.3
+
+    Case A — No topping (t_topping = 0)
+        All _comp keys mirror the net section values.
+
+    Case B — Half Slab + topping  (hcs_type == "Half Slab (Open Top)")
+        Topping fills open cores → solid rectangular composite:
+            A_comp  = b_top × (h + t_topping)
+            yb_comp = (h + t_topping) / 2
+            I_comp  = b_top × (h + t_topping)³ / 12
+
+    Case C — Full HCS + topping
+        Transform topping to HCS-concrete equivalent using n_mod = Ec_top/Ec_hcs:
+            b_top_tr = b_top × n_mod
+            A_top_tr = b_top_tr × t_topping
+            y_top_c  = h + t_topping / 2          (topping CG from HCS bottom)
+
+            A_comp   = An + A_top_tr
+            yb_comp  = (An×yb + A_top_tr×y_top_c) / A_comp
+
+        Parallel-axis inertia:
+            d_net    = yb_comp − yb
+            d_top    = y_top_c − yb_comp
+            I_top_tr = b_top_tr × t_topping³ / 12
+            I_comp   = In + An×d_net² + I_top_tr + A_top_tr×d_top²
+
+        Section moduli (in HCS-concrete stress units):
+            Sb_comp   = I_comp / yb_comp
+            St_comp   = I_comp / (h + t_top − yb_comp)    top of topping
+            St_hcs    = I_comp / |h − yb_comp|             top of HCS (interface)
+            St_top_tr = St_comp × n_mod   → stress in topping concrete (Phase 4)
+
+    Parameters
+    ----------
+    net_props : output dict of calc_net_section()
+    b_top     : HCS top flange width (mm)
+    h         : HCS total depth (mm)
+    t_topping : topping thickness (mm)
+    n_mod     : modular ratio Ec_top / Ec_hcs
+    hcs_type  : "Full HCS (Hollow Core)" | "Half Slab (Open Top)"
+
+    Returns
+    -------
+    dict — all net_props keys plus:
+        A_comp, yb_comp, yt_comp, I_comp,
+        Sb_comp, St_comp, St_hcs, St_top_tr,
+        h_total, A_top_tr, b_top_tr
+    """
+    An = net_props["An"]
+    yb = net_props["yb"]
+    In = net_props["In"]
+
+    # ── Case A: no topping ────────────────────────────────────────────────────
+    if t_topping <= 0:
+        comp = dict(net_props)
+        comp.update({
+            "A_comp"   : An,
+            "yb_comp"  : yb,
+            "yt_comp"  : net_props["yt"],
+            "I_comp"   : In,
+            "Sb_comp"  : net_props["Sb"],
+            "St_comp"  : net_props["St"],
+            "St_hcs"   : net_props["St"],
+            "St_top_tr": net_props["St"],
+            "h_total"  : h,
+            "A_top_tr" : 0.0,
+            "b_top_tr" : 0.0,
+        })
+        return comp
+
+    # ── Case B: Half Slab + topping → fully solid ─────────────────────────────
+    if hcs_type == "Half Slab (Open Top)":
+        h_total = h + t_topping
+        A_comp  = b_top * h_total
+        yb_comp = h_total / 2.0
+        yt_comp = h_total - yb_comp
+        I_comp  = b_top * h_total ** 3 / 12.0
+        Sb_comp = I_comp / yb_comp
+        St_comp = I_comp / yt_comp
+        yt_hcs  = abs(h - yb_comp) if abs(h - yb_comp) > 1e-3 else 1e-3
+        St_hcs  = I_comp / yt_hcs
+        St_top_tr = St_comp * n_mod
+        comp = dict(net_props)
+        comp.update({
+            "A_comp"   : A_comp,
+            "yb_comp"  : yb_comp,
+            "yt_comp"  : yt_comp,
+            "I_comp"   : I_comp,
+            "Sb_comp"  : Sb_comp,
+            "St_comp"  : St_comp,
+            "St_hcs"   : St_hcs,
+            "St_top_tr": St_top_tr,
+            "h_total"  : h_total,
+            "A_top_tr" : b_top * t_topping,
+            "b_top_tr" : b_top,
+        })
+        return comp
+
+    # ── Case C: Full HCS + transformed topping ────────────────────────────────
+    b_top_tr = b_top * n_mod
+    A_top_tr = b_top_tr * t_topping
+    y_top_c  = h + t_topping / 2.0
+
+    A_comp   = An + A_top_tr
+    yb_comp  = (An * yb + A_top_tr * y_top_c) / A_comp
+    yt_comp  = h + t_topping - yb_comp
+
+    d_net    = yb_comp - yb
+    d_top    = y_top_c - yb_comp
+    I_top_tr = b_top_tr * t_topping ** 3 / 12.0
+    I_comp   = In + An * d_net ** 2 + I_top_tr + A_top_tr * d_top ** 2
+
+    Sb_comp   = I_comp / yb_comp
+    St_comp   = I_comp / yt_comp
+    yt_hcs    = abs(h - yb_comp) if abs(h - yb_comp) > 1e-3 else 1e-3
+    St_hcs    = I_comp / yt_hcs
+    St_top_tr = St_comp * n_mod
+
+    h_total  = h + t_topping
+
+    comp = dict(net_props)
+    comp.update({
+        "A_comp"   : A_comp,
+        "yb_comp"  : yb_comp,
+        "yt_comp"  : yt_comp,
+        "I_comp"   : I_comp,
+        "Sb_comp"  : Sb_comp,
+        "St_comp"  : St_comp,
+        "St_hcs"   : St_hcs,
+        "St_top_tr": St_top_tr,
+        "h_total"  : h_total,
+        "A_top_tr" : A_top_tr,
+        "b_top_tr" : b_top_tr,
+    })
+    return comp
+
+
+# =============================================================================
+# 3. PRESTRESS ECCENTRICITY
+# =============================================================================
+def calc_ps_eccentricity(
+        yb     : float,
+        dp_bot : float,
+        dp_top : float,
+        n_top  : int,
+        Aps_bot: float,
+        Aps_top: float,
+) -> dict:
+    """
+    Eccentricity of prestressing force from section centroid (net section).
+    Ref: PCI Design Handbook 8th Ed. Sec. 2.2  |  ACI/PCI 319-25 Cl. 26.10
+
+    Sign convention (PCI standard for simply-supported prestressed beams):
+        e_bot  = dp_bot − yb   (+ve when bottom steel is BELOW centroid → favourable)
+        e_top  = dp_top − yb   (−ve when top steel is ABOVE centroid)
+
+    Net eccentricity (resultant of all PS steel):
+        e_net = (Aps_bot×e_bot + Aps_top×e_top) / (Aps_bot + Aps_top)
+
+    Parameters
+    ----------
+    yb      : centroid from bottom of net section (mm)
+    dp_bot  : distance from bottom fibre to bottom steel CG (mm)
+    dp_top  : distance from bottom fibre to top steel CG (mm)
+    n_top   : number of top tendons (0 = none present)
+    Aps_bot : total bottom PS area (mm²)
+    Aps_top : total top PS area (mm²)
+
+    Returns
+    -------
+    dict — keys: e_bot, e_top, e_net  (all in mm)
+    """
+    e_bot = dp_bot - yb
+    e_top = dp_top - yb if n_top > 0 else 0.0
+
+    Aps_total = Aps_bot + Aps_top
+    e_net     = (Aps_bot * e_bot + Aps_top * e_top) / Aps_total if Aps_total > 0 else 0.0
+
+    return {
+        "e_bot": e_bot,
+        "e_top": e_top,
+        "e_net": e_net,
+    }
+
+
+# =============================================================================
+# 4. MASTER FUNCTION
+# =============================================================================
+def get_all_section_props(ss: dict) -> dict:
+    """
+    Master function — reads session_state dict, calls all three calculation
+    functions above, and returns a combined dict with ALL section properties
+    ready to be stored in session_state with prefix 'sp_'.
+
+    Reads from ss
+    -------------
+    Geometry  : b_top, h, tf_bot, hcs_type
+    Voids     : core_shape, d_core, n_core, h_straight, h_taper,
+                A_core_1, A_voids_total, h_core
+    Topping   : has_topping, t_topping, n_mod
+    Prestress : n_bot, n_top, cover_bot, cover_top, ps_area,
+                Aps_bot, Aps_top, dp_bot, dp_top
+
+    Returns
+    -------
+    dict — superset of calc_net_section() + calc_composite_section() keys
+           plus eccentricity keys: e_bot, e_top, e_net
+    """
+    # ── Geometry ──────────────────────────────────────────────────────────────
+    b_top         = ss["b_top"]
+    h             = ss["h"]
+    tf_bot        = ss["tf_bot"]
+    hcs_type      = ss["hcs_type"]
+    core_shape    = ss["core_shape"]
+    d_core        = float(ss["d_core"])
+    n_core        = int(ss["n_core"])
+    h_straight    = float(ss["h_straight"])
+    h_taper       = float(ss["h_taper"])
+    A_core_1      = ss["A_core_1"]
+    A_voids_total = ss["A_voids_total"]
+    h_core        = ss["h_core"]
+    t_topping     = float(ss["t_topping"]) if ss.get("has_topping") else 0.0
+    n_mod         = ss.get("n_mod", 1.0)
+
+    # ── Prestress layout ──────────────────────────────────────────────────────
+    ps_area  = ss.get("ps_area", 19.6)
+    n_bot    = int(ss.get("n_bot", 0))
+    n_top    = int(ss.get("n_top", 0))
+    cover_bot= float(ss.get("cover_bot", 35))
+    cover_top= float(ss.get("cover_top", 30))
+    Aps_bot  = ss.get("Aps_bot",  n_bot * ps_area)
+    Aps_top  = ss.get("Aps_top",  n_top * ps_area)
+    dp_bot   = ss.get("dp_bot",   h - cover_bot)
+    dp_top   = ss.get("dp_top",   cover_top)
+
+    # ── 1. Net section ────────────────────────────────────────────────────────
+    net = calc_net_section(
+        b_top         = b_top,
+        h             = h,
+        tf_bot        = tf_bot,
+        core_shape    = core_shape,
+        d_core        = d_core,
+        n_core        = n_core,
+        h_straight    = h_straight,
+        h_taper       = h_taper,
+        A_core_1      = A_core_1,
+        A_voids_total = A_voids_total,
+        h_core        = h_core,
+    )
+
+    # ── 2. Composite section ──────────────────────────────────────────────────
+    comp = calc_composite_section(
+        net_props = net,
+        b_top     = b_top,
+        h         = h,
+        t_topping = t_topping,
+        n_mod     = n_mod,
+        hcs_type  = hcs_type,
+    )
+
+    # ── 3. Eccentricity ───────────────────────────────────────────────────────
+    ecc = calc_ps_eccentricity(
+        yb      = net["yb"],
+        dp_bot  = dp_bot,
+        dp_top  = dp_top,
+        n_top   = n_top,
+        Aps_bot = Aps_bot,
+        Aps_top = Aps_top,
+    )
+
+    # ── Merge: comp already contains all net keys ─────────────────────────────
+    result = dict(comp)
+    result.update(ecc)
+    return result
