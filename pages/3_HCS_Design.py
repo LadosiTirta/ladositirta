@@ -1,5 +1,5 @@
 # =============================================================================
-# HCS DESIGN APP — Phase 1A: Input UI & Session State
+# HCS DESIGN APP — Phase 2: Section Properties
 # =============================================================================
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
 # Units: SI only (mm, kN, MPa)
@@ -279,6 +279,19 @@ PRESET_TABLE = {
 # =============================================================================
 def init_session_state():
     """Initialise all session state variables with HCS 200mm defaults."""
+    # Pre-calculate default derived geometry values for HCS 200mm Teardrop
+    # A_core_1 = calc_core_area("Teardrop", 80, 40, 40)
+    #          = (pi/4)*80² + 0.65*80*40 ≈ 5026.55 + 2080 = 7106.55
+    # A_voids_total = 9 * 7106.55 ≈ 63959
+    # h_core = 80 + 40 = 120
+    _default_A_core_1      = 7106.5
+    _default_A_voids_total = 9 * _default_A_core_1   # ≈ 63959
+    _default_h_core        = 120.0
+    _default_bw_shear      = 1199 - 9 * 80           # 479
+    _default_Ec_hcs        = 33_000.0                # approximate
+    _default_Ec_top        = 27_000.0
+    _default_n_mod         = _default_Ec_top / _default_Ec_hcs if _default_Ec_hcs > 0 else 1.0
+
     defaults = {
         # ── A. Concrete ──
         "f_ci":        35.0,
@@ -329,6 +342,17 @@ def init_session_state():
         "dp_bot":      165.0,    # 200 − 35
         "dp_top":      30.0,
         "Pi":          237.8,    # Aps_bot × fpi / 1000
+
+        # ── Derived geometry (pre-calculated for HCS 200mm) ──
+        "A_core_1":      _default_A_core_1,
+        "A_voids_total": _default_A_voids_total,
+        "h_core":        _default_h_core,
+        "bw_shear":      _default_bw_shear,
+
+        # ── Material-derived defaults ──
+        "Ec_hcs":        _default_Ec_hcs,
+        "Ec_top":        _default_Ec_top,
+        "n_mod":         _default_n_mod,
 
         # ── Auto-calc defaults (overwritten by tab logic on first render) ──
         "SW_HCS":      3.5,      # approximate kN/m² for HCS 200mm
@@ -501,17 +525,6 @@ def calc_transfer_development_length(
       #          (full ACI fps formula will be computed in Phase 5)
       #   d_ps = nominal diameter (mm)
       # Note: 20.7 = unit conversion factor (ksi·in → MPa·mm / 25.4)
-
-    Inputs:
-      ps_type          : "PC Wire (plain/indented)" or "7-Wire Strand (low relax)"
-      d_ps             : nominal diameter (mm)
-      fpu              : ultimate strength (MPa)
-      fpi              : initial prestress (MPa)
-      assumed_loss_pct : preliminary loss estimate (%) — placeholder until Phase 3
-                         Default = 20% (conservative per PCI Sec. 4.7)
-
-    Returns dict with keys:
-      l_t, l_d, fse_est, fps_est, method_lt, loss_note
     """
     fse_est = fpi * (1.0 - assumed_loss_pct / 100.0)    # MPa — estimated after losses
     fps_est = min(fpu, st.session_state.get("fpy", fpu * 0.90) + 70.0)  # MPa
@@ -937,10 +950,10 @@ _ss["lb_ps_status"]  = _dev["status"]
 _ss["lb_ps_is_ps"]   = _dev["is_prestressed"]
 _ss["lb_ps_message"] = _dev["message"]
 
-# Load diagrams
+# Load diagrams — safely access A_voids_total (initialised in init_session_state)
+_A_voids_total = _ss.get("A_voids_total", 63959.0)  # default HCS 200mm
 _SW_HCS     = _ss.get("SW_HCS",
-                       _ss["wc"] * (_ss["b_bottom"] * _ss["h"]
-                                    - _ss["A_voids_total"])
+                       _ss["wc"] * (_ss["b_bottom"] * _ss["h"] - _A_voids_total)
                        / (_ss["b_bottom"] * 1e6))
 _SW_topping = _ss.get("SW_topping",
                        _ss["wc_top"] * _ss["b_nominal"] * _ss["t_topping"]
@@ -1024,7 +1037,6 @@ with st.sidebar:
     <span style="color:#39d353;">&#10003; Phase 1A</span> — Input &amp; Session State<br>
     <span style="color:#39d353;">&#10003; Phase 1B</span> — Span &amp; Transfer Length<br>
     <b style="color:#388bfd;">&#9654; Phase 2</b> &nbsp;— Section Properties<br>
-    <span style="color:#30363d;">Phase 2  — Section Properties</span><br>
     <span style="color:#30363d;">Phase 3  — Prestress Losses</span><br>
     <span style="color:#30363d;">Phase 4  — Stress Checks</span><br>
     <span style="color:#30363d;">Phase 5  — Mn & Vn Capacity</span><br>
