@@ -19,7 +19,7 @@ from hcs.geometry    import (calc_core_area, calc_h_core,
 from hcs.span_loads  import (calc_transfer_development_length,
                               check_prestress_development,
                               calc_factored_loads_and_diagrams)
-from hcs.section_props import calc_section_properties
+from hcs.section_props import get_all_section_props
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -432,35 +432,10 @@ for _k, _v in _ld.items():
     _ss[f"lb_{_k}"] = _v
 
 # ── Phase 2: Section Properties auto-calc (run every render) ──────────────
-_n_ps = _ss["Eps"] / _ss.get("Ec_hcs", 33000.0)
-_sp = calc_section_properties(
-    b_top         = _ss["b_top"],
-    b_bottom      = _ss["b_bottom"],
-    h             = _ss["h"],
-    tf_top        = _ss["tf_top"],
-    tf_bot        = _ss["tf_bot"],
-    hcs_type      = _ss["hcs_type"],
-    core_shape    = _ss["core_shape"],
-    d_core        = _ss["d_core"],
-    n_core        = _ss["n_core"],
-    h_straight    = _ss["h_straight"],
-    h_taper       = _ss["h_taper"],
-    A_core_1      = _ss["A_core_1"],
-    A_voids_total = _ss["A_voids_total"],
-    h_core        = _ss["h_core"],
-    has_topping   = _ss["has_topping"],
-    t_topping     = _ss["t_topping"],
-    b_nominal     = _ss["b_nominal"],
-    n_mod         = _ss.get("n_mod", 1.0),
-    Aps_bot       = _ss.get("Aps_bot", _ss["n_bot"] * _ss["ps_area"]),
-    Aps_top       = _ss.get("Aps_top", _ss["n_top"] * _ss["ps_area"]),
-    dp_bot        = _ss.get("dp_bot",  _ss["h"] - _ss["cover_bot"]),
-    dp_top        = _ss.get("dp_top",  _ss["cover_top"]),
-    n_ps          = _n_ps,
-)
+# Reference: ACI/PCI CODE-319-25 Cl. 26.12 | PCI Design Handbook Sec. 2.2 & 4.2.3
+_sp = get_all_section_props(dict(_ss))
 for _k, _v in _sp.items():
     _ss[f"sp_{_k}"] = _v
-_ss["sp_n_ps"] = _n_ps
 
 # =============================================================================
 # APP HEADER
@@ -505,10 +480,10 @@ with st.sidebar:
 # =============================================================================
 # MAIN TABS
 # =============================================================================
-tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_sum, tab_P2 = st.tabs([
+tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_G, tab_sum, tab_P2 = st.tabs([
     "A · Concrete", "B · Cross-Section", "C · Prestress",
-    "D · Span", "E · Loads", "F · Seismic", "📋 Summary",
-    "📐 Appendix A · Section Props"
+    "D · Span", "E · Loads", "F · Seismic", "G · Section Props",
+    "📋 Summary", "📐 Appendix A · Section Props"
 ])
 
 
@@ -1686,4 +1661,127 @@ with tab_P2:
     &nbsp;• Phase 4 (Stress Checks Service): uses Sb_net (DL) and Sbc_comp / Stc_comp (SDL+LL)<br>
     &nbsp;• Phase 5 (Mn/Vn Capacity): uses dp_bot, Aps_bot, composite section geometry<br>
     &nbsp;• Phase 6 (Deflection): uses I_net (prestress/DL) and I_comp (SDL+LL)
+    </div>""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB G — SECTION PROPERTIES  (quick view)
+# Reference: ACI/PCI CODE-319-25 Cl. 26.12
+#            PCI Design Handbook, 8th Edition Sec. 2.2 & 4.2.3
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_G:
+    st.markdown("## G · Section Properties")
+    st.caption(
+        "Ref: ACI/PCI CODE-319-25 Cl. 26.12  |  PCI Design Handbook 8th Ed. Sec. 2.2 & 4.2.3  "
+        "|  Full detail → Appendix A tab"
+    )
+
+    _g = st.session_state   # local alias
+
+    # ── G.1 Gross Section ─────────────────────────────────────────────────────
+    section_hdr("G.1", "Gross Section  (b_top × h, no voids, no steel)")
+    st.markdown(f"""
+    <div class="metric-grid">
+        {metric_card("Ag",      f"{_g.get('sp_Ag',  0):,.0f}",               "mm²")}
+        {metric_card("yb_g",    f"{_g.get('sp_yb_g', 0):.1f}",               "mm")}
+        {metric_card("yt_g",    f"{_g.get('sp_yt_g', 0):.1f}",               "mm")}
+        {metric_card("Ig",      f"{_g.get('sp_Ig',  0)/1e6:.3f}",            "×10⁶ mm⁴")}
+        {metric_card("Sb_g",    f"{_g.get('sp_Sb_g', 0)/1e3:.1f}",           "×10³ mm³")}
+        {metric_card("St_g",    f"{_g.get('sp_St_g', 0)/1e3:.1f}",           "×10³ mm³")}
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── G.2 Net HCS Section ───────────────────────────────────────────────────
+    section_hdr("G.2", "Net HCS Section  (voids subtracted, concrete only)")
+    st.markdown(f"""
+    <div class="metric-grid">
+        {metric_card("An",      f"{_g.get('sp_An',  0):,.0f}",               "mm²")}
+        {metric_card("yb",      f"{_g.get('sp_yb',  0):.2f}",                "mm")}
+        {metric_card("yt",      f"{_g.get('sp_yt',  0):.2f}",                "mm")}
+        {metric_card("In",      f"{_g.get('sp_In',  0)/1e6:.3f}",            "×10⁶ mm⁴")}
+        {metric_card("Sb",      f"{_g.get('sp_Sb',  0)/1e3:.1f}",            "×10³ mm³")}
+        {metric_card("St",      f"{_g.get('sp_St',  0)/1e3:.1f}",            "×10³ mm³")}
+        {metric_card("r²",      f"{_g.get('sp_r2',  0):.1f}",                "mm²")}
+        {metric_card("y_void_c",f"{_g.get('sp_y_void_c', 0):.1f}",          "mm")}
+    </div>""", unsafe_allow_html=True)
+
+    # Kern points
+    st.markdown(f"""
+    <div class="info-box">
+    <b>Kern points</b> — no-tension zone  (ACI/PCI 319-25 Cl. 24.5.2):<br>
+    k_b = In / (An × yb) = <b>{_g.get('sp_kb', 0):.1f} mm</b>
+          (lower kern — from bottom fibre)<br>
+    k_t = In / (An × yt) = <b>{_g.get('sp_kt', 0):.1f} mm</b>
+          (upper kern — from top fibre)<br>
+    Prestress resultant within kern → no tensile stress in concrete under P alone.
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── G.3 Eccentricity ──────────────────────────────────────────────────────
+    section_hdr("G.3", "Prestress Eccentricity  (from net section centroid)")
+    st.caption("Ref: PCI Design Handbook Sec. 2.2  |  ACI/PCI 319-25 Cl. 26.10")
+
+    ecol1, ecol2, ecol3 = st.columns(3)
+    ecol1.metric(
+        "e_bot  (bottom steel)",
+        f"{_g.get('sp_e_bot', 0):.2f} mm",
+        help="dp_bot − yb  (+ve = below centroid = sagging favourable)"
+    )
+    if _g.get("n_top", 0) > 0:
+        ecol2.metric(
+            "e_top  (top steel)",
+            f"{_g.get('sp_e_top', 0):.2f} mm",
+            help="dp_top − yb  (−ve = above centroid)"
+        )
+    else:
+        ecol2.info("No top tendons (n_top = 0)")
+    ecol3.metric(
+        "e_net  (resultant)",
+        f"{_g.get('sp_e_net', 0):.2f} mm",
+        help="(Aps_bot×e_bot + Aps_top×e_top) / Aps_total"
+    )
+
+    st.markdown("---")
+
+    # ── G.4 Composite Section ─────────────────────────────────────────────────
+    section_hdr("G.4", "Composite Section  (HCS + topping)")
+    st.caption("Ref: PCI Design Handbook 8th Ed. Sec. 2.2.3  |  n_mod = Ec_top / Ec_hcs")
+
+    if _g.get("has_topping") and _g.get("t_topping", 0) > 0:
+        st.markdown(f"""
+        <div class="metric-grid">
+            {metric_card("A_comp",    f"{_g.get('sp_A_comp',   0):,.0f}",          "mm²")}
+            {metric_card("yb_comp",   f"{_g.get('sp_yb_comp',  0):.2f}",           "mm from HCS bot")}
+            {metric_card("yt_comp",   f"{_g.get('sp_yt_comp',  0):.2f}",           "mm from top")}
+            {metric_card("I_comp",    f"{_g.get('sp_I_comp',   0)/1e6:.3f}",       "×10⁶ mm⁴")}
+            {metric_card("Sb_comp",   f"{_g.get('sp_Sb_comp',  0)/1e3:.1f}",       "×10³ mm³ (bot)")}
+            {metric_card("St_comp",   f"{_g.get('sp_St_comp',  0)/1e3:.1f}",       "×10³ mm³ (top topping)")}
+            {metric_card("St_hcs",    f"{_g.get('sp_St_hcs',   0)/1e3:.1f}",       "×10³ mm³ (HCS top)")}
+            {metric_card("St_top_tr", f"{_g.get('sp_St_top_tr',0)/1e3:.1f}",       "×10³ mm³ (topping units)")}
+            {metric_card("h_total",   f"{_g.get('sp_h_total',  0):.0f}",           "mm")}
+            {metric_card("b_top_tr",  f"{_g.get('sp_b_top_tr', 0):.1f}",           "mm (transformed)")}
+        </div>""", unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="info-box">
+        <b>n_mod</b> = Ec_top / Ec_hcs = <b>{_g.get('n_mod', 0):.3f}</b>
+        &nbsp;·&nbsp; Topping transformed width = b_top × n_mod = <b>{_g.get('sp_b_top_tr', 0):.1f} mm</b><br>
+        <b>St_top_tr</b> = St_comp × n_mod — used in Phase 4 to check stress in topping concrete.
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.info("No structural topping — composite section equals net HCS section.")
+        st.markdown(f"""
+        <div class="metric-grid">
+            {metric_card("A_comp = An", f"{_g.get('sp_A_comp', 0):,.0f}",        "mm²")}
+            {metric_card("I_comp = In", f"{_g.get('sp_I_comp', 0)/1e6:.3f}",     "×10⁶ mm⁴")}
+            {metric_card("yb_comp = yb",f"{_g.get('sp_yb_comp',0):.2f}",         "mm")}
+            {metric_card("h_total = h", f"{_g.get('sp_h_total', 0):.0f}",        "mm")}
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("""
+    <div class="info-box">
+    ℹ️  Full step-by-step calculation trace (void I derivations, parallel-axis tables,
+    kern diagram) is available in <b>Appendix A · Section Props</b> tab.
     </div>""", unsafe_allow_html=True)
