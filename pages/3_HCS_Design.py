@@ -1,5 +1,5 @@
 # =============================================================================
-# HCS DESIGN APP — Phase 6: Section + Losses + Stress + Capacity + Deflection
+# HCS DESIGN APP — Phase 7: Complete (All phases 1-7)
 # =============================================================================
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
 # Units: SI only (mm, kN, MPa)
@@ -10,40 +10,32 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime
 
-# ── hcs/ module imports ────────────────────────────────────────────────────────
-from hcs.constants   import WIRE_PROPS, STRAND_PROPS, PRESET_TABLE
-from hcs.geometry    import (calc_core_area, calc_h_core,
-                              calc_modular_ratio, get_ps_props)
-from hcs.span_loads  import (calc_transfer_development_length,
-                              check_prestress_development,
-                              calc_factored_loads_and_diagrams)
+# hcs imports
+from hcs.constants import WIRE_PROPS, STRAND_PROPS, PRESET_TABLE
+from hcs.geometry import calc_core_area, calc_h_core, calc_modular_ratio, get_ps_props
+from hcs.span_loads import calc_transfer_development_length, check_prestress_development, calc_factored_loads_and_diagrams
 from hcs.section_props import get_all_section_props
 from hcs.prestress_loss import get_prestress_losses
 from hcs.stress_check import get_all_stress_checks
 from hcs.capacity import get_capacity_results
-from hcs.deflection import get_deflection_results   # Phase 6
+from hcs.deflection import get_deflection_results
+from hcs.report import get_report_bytes
 
-# ── Page Config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="HCS Design — ACI/PCI 319-25",
-    page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="HCS Design — ACI/PCI 319-25", page_icon="🏗️", layout="wide", initial_sidebar_state="expanded")
 
 # =============================================================================
-# SESSION STATE INITIALISATION (sama seperti sebelumnya)
+# SESSION STATE INITIALISATION
 # =============================================================================
 def init_session_state():
-    _default_A_core_1      = 7106.5
+    _default_A_core_1 = 7106.5
     _default_A_voids_total = 9 * _default_A_core_1
-    _default_h_core        = 120.0
-    _default_bw_shear      = 1199 - 9 * 80
-    _default_Ec_hcs        = 33000.0
-    _default_Ec_top        = 27000.0
-    _default_n_mod         = _default_Ec_top / _default_Ec_hcs if _default_Ec_hcs > 0 else 1.0
-
+    _default_h_core = 120.0
+    _default_bw_shear = 1199 - 9 * 80
+    _default_Ec_hcs = 33000.0
+    _default_Ec_top = 27000.0
+    _default_n_mod = _default_Ec_top / _default_Ec_hcs if _default_Ec_hcs > 0 else 1.0
     defaults = {
         "f_ci": 35.0, "f_c_cut": 40.0, "f_c_del": 45.0, "f_c_ere": 50.0,
         "f_c": 50.0, "wc": 24.0, "has_topping": True, "f_c_top": 30.0, "wc_top": 24.0,
@@ -73,43 +65,28 @@ def init_session_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-# =============================================================================
-# UI HELPER FUNCTIONS
-# =============================================================================
-def apply_preset(preset_name: str):
+# UI Helper functions
+def apply_preset(preset_name):
     p = PRESET_TABLE.get(preset_name)
-    if p is None:
-        return
-    for k, v in p.items():
-        st.session_state[k] = v
-
-def get_ps_diameter_mm() -> float:
+    if p:
+        for k, v in p.items():
+            st.session_state[k] = v
+def get_ps_diameter_mm():
     if st.session_state["ps_type"] == "PC Wire (plain/indented)":
         return float(st.session_state["wire_dia"])
     else:
         return STRAND_PROPS[st.session_state["strand_size"]]["d_mm"]
-
-def badge_html(label: str, status: str, detail: str = "") -> str:
+def badge_html(label, status, detail=""):
     css = {"OK": "badge-ok", "WARN": "badge-warn", "ERR": "badge-err"}[status]
     icons = {"OK": "✓", "WARN": "⚠", "ERR": "✗"}[status]
     return f'<span class="{css}">{icons} {label}{" — " + detail if detail else ""}</span>'
-
-def metric_card(label: str, value: str, unit: str = "") -> str:
-    return f"""
-    <div class="metric-card">
-        <div class="metric-label">{label}</div>
-        <div class="metric-value">{value}<span class="metric-unit">{unit}</span></div>
-    </div>"""
-
-def section_hdr(code: str, title: str):
-    st.markdown(f"""
-    <div class="section-header">
-        <span class="section-label">{code}</span>
-        <h3>{title}</h3>
-    </div>""", unsafe_allow_html=True)
+def metric_card(label, value, unit=""):
+    return f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}<span class="metric-unit">{unit}</span></div></div>'
+def section_hdr(code, title):
+    st.markdown(f'<div class="section-header"><span class="section-label">{code}</span><h3>{title}</h3></div>', unsafe_allow_html=True)
 
 # =============================================================================
-# APP STARTUP
+# AUTO-CALCULATIONS (Phase 1B to 6)
 # =============================================================================
 init_session_state()
 _ss = st.session_state
@@ -118,7 +95,6 @@ _ss = st.session_state
 _fpu_def = _ss.get("fpu", 1618.0)
 _fpi_pct_def = _ss.get("fpi_pct", 75.0)
 _fpi = _ss.get("fpi", _fpu_def * _fpi_pct_def / 100.0)
-_Aps_bot = _ss.get("Aps_bot", _ss.get("n_bot", 10) * _ss.get("ps_area", 19.6))
 _d_ps_mm = get_ps_diameter_mm()
 _td = calc_transfer_development_length(ps_type=_ss["ps_type"], d_ps=_d_ps_mm, fpu=_ss["fpu"],
     fpi=_fpi, fpy=_ss.get("fpy", _ss["fpu"] * 0.885), assumed_loss_pct=20.0)
@@ -169,50 +145,30 @@ for k, v in _def.items():
     _ss[k] = v
 
 # =============================================================================
-# APP HEADER
+# APP HEADER & SIDEBAR
 # =============================================================================
 st.markdown("""
 <div class="app-header">
-    <div style="margin-bottom:8px">
-        <span class="phase-badge">PHASE 6</span>
-        <span class="phase-badge">ACI/PCI 319-25</span>
-        <span class="phase-badge">PCI 8th Ed.</span>
-    </div>
+    <div><span class="phase-badge">PHASE 7</span><span class="phase-badge">ACI/PCI 319-25</span><span class="phase-badge">PCI 8th Ed.</span></div>
     <h1>🏗️ Hollow Core Slab Design</h1>
-    <div class="subtitle">Structural Design Calculator · SI Units (mm · kN · MPa) · v1.0-alpha</div>
+    <div class="subtitle">Full Design Suite · SI Units · v1.0</div>
 </div>
 """, unsafe_allow_html=True)
 
-# SIDEBAR
 with st.sidebar:
     st.markdown("### 📐 HCS Design App")
     st.markdown("---")
-    st.markdown("""
-    <div style="font-size:0.8rem; color:#8b949e;">
-    <span style="color:#39d353;">✔ Phase 1A</span> — Input<br>
-    <span style="color:#39d353;">✔ Phase 1B</span> — Span & Transfer<br>
-    <span style="color:#39d353;">✔ Phase 2</span> — Section Props<br>
-    <span style="color:#39d353;">✔ Phase 3</span> — Prestress Losses<br>
-    <span style="color:#39d353;">✔ Phase 4</span> — Stress Checks<br>
-    <span style="color:#39d353;">✔ Phase 5</span> — Capacity<br>
-    <b style="color:#388bfd;">▶ Phase 6</b> — Deflection<br>
-    <span style="color:#30363d;">Phase 7 — Report</span>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown("""✔ Phase 1A — Input<br>✔ Phase 1B — Span & Transfer<br>✔ Phase 2 — Section Props<br>✔ Phase 3 — Losses<br>✔ Phase 4 — Stress Checks<br>✔ Phase 5 — Capacity<br>✔ Phase 6 — Deflection<br>▶ Phase 7 — Report Generator""", unsafe_allow_html=True)
     st.caption("References: ACI/PCI 319-25, PCI Handbook 8th Ed.")
 
 # =============================================================================
-# TABS (A sampai J + Summary + Appendix)
+# TABS (A to K + Summary + Appendix)
 # =============================================================================
-tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_G, tab_H, tab_I, tab_J, tab_sum, tab_P2 = st.tabs([
-    "A · Concrete", "B · Section", "C · Prestress", "D · Span",
-    "E · Loads", "F · Seismic", "G · Props", "H · Stress",
-    "I · Capacity", "J · Deflection", "📋 Summary", "📐 Appendix A"
-])
+tabs = st.tabs(["A · Concrete", "B · Section", "C · Prestress", "D · Span", "E · Loads", "F · Seismic", "G · Props", "H · Stress", "I · Capacity", "J · Deflection", "K · Report", "📋 Summary", "📐 Appendix A"])
+tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_G, tab_H, tab_I, tab_J, tab_K, tab_sum, tab_P2 = tabs
 
 # -----------------------------------------------------------------------------
-# TAB A — Concrete (sederhana, seperti di file sebelumnya, tapi saya singkat agar ringkas)
+# TAB A — Concrete
 # -----------------------------------------------------------------------------
 with tab_A:
     section_hdr("A.1", "HCS Concrete")
@@ -563,7 +519,7 @@ with tab_I:
             st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB J — DEFLECTION (Phase 6)
+# TAB J — Deflection
 # -----------------------------------------------------------------------------
 with tab_J:
     st.markdown("## J · Deflection & Camber")
@@ -599,13 +555,66 @@ with tab_J:
             st.success("Deflection within code limits.")
 
 # -----------------------------------------------------------------------------
-# TAB SUMMARY dan APPENDIX A (sederhana untuk sementara)
+# TAB K — REPORT GENERATOR (Phase 7)
+# -----------------------------------------------------------------------------
+with tab_K:
+    st.markdown("## K · Report Generator")
+    st.caption("Generate professional calculation report in Word or PDF format.")
+    st.info("Reports include all design inputs, section properties, losses, stress checks, capacity, and deflection.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📄 Generate Word Report (.docx)", use_container_width=True):
+            with st.spinner("Generating Word report..."):
+                word_bytes, _ = get_report_bytes(_ss)
+                if word_bytes:
+                    st.download_button(
+                        label="Download Word Report",
+                        data=word_bytes,
+                        file_name=f"HCS_Design_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("Word generation failed. Please install python-docx.")
+    with col2:
+        if st.button("📑 Generate PDF Report", use_container_width=True):
+            with st.spinner("Generating PDF report..."):
+                _, pdf_bytes = get_report_bytes(_ss)
+                if pdf_bytes:
+                    st.download_button(
+                        label="Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"HCS_Design_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("PDF generation failed. Please install reportlab.")
+
+    st.markdown("---")
+    st.markdown("""
+    **Note:** The report includes:
+    - All input parameters
+    - Transfer & development length
+    - Section properties (gross, net, composite)
+    - Prestress losses (ES, CR, SH, RE)
+    - Stress checks (transfer, lifting, construction, service)
+    - Flexural and shear capacity (Mn, Vn, DCR)
+    - Deflection and camber (initial, long-term, code limits)
+    - Remarks and code references
+    """)
+
+# -----------------------------------------------------------------------------
+# TAB SUMMARY (placeholder)
 # -----------------------------------------------------------------------------
 with tab_sum:
     st.markdown("## Summary")
-    st.info("Full summary table will be implemented in Phase 7.")
+    st.info("Full summary table can be generated via Report tab.")
 
+# -----------------------------------------------------------------------------
+# TAB APPENDIX A (placeholder)
+# -----------------------------------------------------------------------------
 with tab_P2:
-    st.markdown("## Appendix A: Section Properties Details")
-    st.caption("Detailed calculation trace will be shown in Phase 7.")
-    st.info("For now, basic properties are shown in Tab G.")
+    st.markdown("## Appendix A: Detailed Section Properties")
+    st.info("Detailed calculations are shown in the Report.")
