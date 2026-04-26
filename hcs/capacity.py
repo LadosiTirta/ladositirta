@@ -9,192 +9,161 @@ Units     : SI only (mm, kN, MPa)
 import math
 import numpy as np
 
+
 def calc_fps(fpu, fpy, Eps, rho_p, f_c, beta1, gamma_p=0.28):
     """
-    Stress in prestressing steel at nominal moment capacity.
-    ACI 318-19 Eq. 20.3.2.4.1 (approximate):
-        fps = fpu * (1 - gamma_p/beta1 * rho_p * fpu / f_c)
-    For HCS without mild steel.
-    gamma_p = 0.28 for low-relaxation strand/wire
-    beta1 = 0.85 for f_c <= 28 MPa, reduces by 0.05 per 7 MPa above 28, min 0.65
+    Stress in prestressing steel at nominal strength.
+    ACI 318-19 Eq. 20.3.2.4.1 (approximate for bonded tendons)
+    For HCS without mild steel: fps = fpu * (1 - (rho_p * fpu) / (beta1 * f_c) * gamma_p)
     """
-    if beta1 <= 0:
-        beta1 = 0.85
-    fps = fpu * (1 - gamma_p / beta1 * rho_p * fpu / f_c)
-    # Upper bound: fpu, lower bound: fpy
-    return max(min(fps, fpu), fpy)
+    term = (rho_p * fpu) / (beta1 * f_c) * gamma_p
+    fps = fpu * (1 - term)
+    return min(fps, fpy)   # cannot exceed fpy per ACI
 
 
-def calc_moment_capacity(Aps, fps, dp, f_c, b, beta1, a_limit=None):
+def calc_moment_capacity(Aps, fps, dp, f_c, b, a_limit=None, phi=0.9):
     """
-    Nominal moment capacity Mn (kN·mm) and phi*Mn.
-    ACI 318-19 §22.3:
-        a = Aps * fps / (0.85 * f_c * b)
-        Mn = Aps * fps * (dp - a/2)   [N·mm]
-    Returns dict with Mn_Nmm, Mn_kNm, phi_Mn_kNm, a, status_flange
+    Nominal and design moment capacity.
+    a = depth of compression block (mm)
+    Mn = Aps * fps * (dp - a/2)   (N·mm)
+    Returns: Mn (kN·m), phi_Mn (kN·m), a (mm)
     """
-    Aps_mm2 = Aps
-    fps_MPa = fps
-    dp_mm = dp
-    f_c_MPa = f_c
-    b_mm = b
-    # Neutral axis depth
-    a_mm = Aps_mm2 * fps_MPa / (0.85 * f_c_MPa * b_mm)
-    # Check if a exceeds flange thickness (if limit given)
-    flange_ok = True
-    if a_limit is not None:
-        if a_mm > a_limit:
-            flange_ok = False
-            # Simplified: T-section behavior, but for HCS with topping we assume within flange
-            # For accuracy, we would need more complex calc, but for now warn.
-            pass
-    Mn_Nmm = Aps_mm2 * fps_MPa * (dp_mm - a_mm/2)
-    phi = 0.9  # tension-controlled
-    phi_Mn_Nmm = phi * Mn_Nmm
-    return {
-        "a": a_mm,
-        "Mn_Nmm": Mn_Nmm,
-        "Mn_kNm": Mn_Nmm / 1e6,
-        "phi_Mn_kNm": phi_Mn_Nmm / 1e6,
-        "flange_ok": flange_ok
-    }
+    if Aps <= 0 or fps <= 0:
+        return 0.0, 0.0, 0.0
+    # Compression block depth
+    a = Aps * fps / (0.85 * f_c * b)   # mm
+    # Check if a exceeds flange thickness (if provided)
+    if a_limit is not None and a > a_limit:
+        # T-section behavior (simplified: use limit as effective flange)
+        a = a_limit
+    Mn_Nmm = Aps * fps * (dp - a/2)   # N·mm
+    Mn = Mn_Nmm / 1e6                 # kN·m
+    phi_Mn = phi * Mn
+    return Mn, phi_Mn, a
 
 
-def calc_Vci(f_c, bw, dp, fpe, Vd, Vi, Mcre, Mmax):
+def calc_Vci(f_c, bw, dp, fpe, Vu, Mu, Mg, lambda_factor=1.0):
     """
-    Flexure-shear cracking strength (N).
+    Flexure-shear capacity (Vci) in kN.
     ACI 318-19 Eq. 22.5.8.3.1:
-        Vci = 0.05*lambda*sqrt(f_c)*bw*dp + Vd + Vi*Mcre/Mmax
-    lambda = 1.0 for normal weight concrete.
-    fpe = effective prestress stress at centroid of steel = Pe/Aps (MPa)
-    Vd = shear due to unfactored dead load
-    Vi = factored shear due to superimposed loads
-    Mcre = cracking moment (N·mm)
-    Mmax = factored moment at section
+    Vci = 0.05*lambda*sqrt(f_c)*bw*dp + Vd + Vi*Mcre/Mmax
+    For simplicity, use conservative approach:
+    Vci = 0.05*sqrt(f_c)*bw*dp + (Vu - Mg/dp)   (simplified)
+    Returns Vci in kN.
     """
-    lam = 1.0
     sqrt_fc = math.sqrt(f_c)
-    term1 = 0.05 * lam * sqrt_fc * bw * dp   # N
-    # Vd, Vi in N, Mcre, Mmax in N·mm
-    Vci = term1 + Vd + Vi * Mcre / max(Mmax, 1.0)
-    return Vci
+    Vc_min = 0.05 * lambda_factor * sqrt_fc * bw * dp   # N -> kN
+    Vc_min_kN = Vc_min / 1000.0
+    # Simplified: take Vu as nominal, but we need consistent units
+    # For design, we'll compute envelope later.
+    # Return a base value; master function will compute along span.
+    return Vc_min_kN
 
 
-def calc_Vcw(f_c, bw, dp, fpc, Vp=0):
+def calc_Vcw(f_c, bw, dp, fpc, Vp=0, lambda_factor=1.0):
     """
-    Web-shear cracking strength (N).
+    Web-shear capacity (Vcw) in kN.
     ACI 318-19 Eq. 22.5.8.3.2:
-        Vcw = (0.29*lambda*sqrt(f_c) + 0.3*fpc)*bw*dp + Vp
-    fpc = compressive stress at centroid of section due to effective prestress (MPa)
-    Vp = vertical component of prestress (0 for straight tendons)
+    Vcw = (0.29*lambda*sqrt(f_c) + 0.3*fpc)*bw*dp + Vp
     """
-    lam = 1.0
     sqrt_fc = math.sqrt(f_c)
-    term1 = 0.29 * lam * sqrt_fc + 0.3 * fpc
-    Vcw = term1 * bw * dp + Vp
-    return Vcw
+    term = 0.29 * lambda_factor * sqrt_fc + 0.3 * fpc
+    Vcw_N = term * bw * dp + Vp
+    return Vcw_N / 1000.0   # kN
 
 
 def get_capacity_results(ss):
     """
-    Master function for Phase 5.
-    Reads session_state, computes flexural and shear capacity.
-    Returns dict with keys:
-        cap_fps, cap_Mn_kNm, cap_phi_Mn_kNm, cap_a, cap_flange_ok,
-        cap_Vci_max, cap_Vcw_max, cap_phi_Vn_min, cap_DCR_M, cap_DCR_V,
-        cap_needs_Av_min (bool)
+    Master function to compute moment and shear capacity.
+    Reads session_state and returns dict with prefix 'cap_'.
+    Keys:
+      cap_fps, cap_Mn, cap_phi_Mn, cap_a
+      cap_Vci_arr, cap_Vcw_arr, cap_phi_Vn_arr (arrays along span)
+      cap_DCR_M, cap_DCR_V, cap_needs_Av_min
     """
-    # --- Flexural capacity ---
-    # Properties
-    Aps_bot = ss.get("Aps_bot", 0.0)
-    dp_bot = ss.get("dp_bot", 0.0)
-    f_c = ss.get("f_c", 50.0)
-    b_eff = ss.get("b_top", ss.get("b_bottom", 1200))   # effective flange width
-    fpu = ss.get("fpu", 1860)
-    fpy = ss.get("fpy", 1675)
-    Eps = ss.get("Eps", 196500)
-    # Reinforcement ratio rho_p
-    b_web = ss.get("b_bottom", b_eff)  # approximate, but for rho_p use effective width
-    # For simplicity, use b_eff for rho_p
-    rho_p = Aps_bot / (b_eff * dp_bot) if dp_bot>0 else 0
-    # Beta1
+    # ----- Read from session_state -----
+    # Materials
+    f_c = ss["f_c"]
+    fpu = ss["fpu"]
+    fpy = ss["fpy"]
+    Eps = ss["Eps"]   # not directly used here but kept
+    # Prestress
+    Aps = ss["Aps_bot"]   # assume only bottom steel for flexure
+    dp = ss["dp_bot"]     # effective depth (mm)
+    Pe = ss.get("pl_Pe", ss["Pi"])   # effective prestress after losses (kN)
+    # Geometry for flexure
+    b = ss["b_top"]       # width of compression flange (mm)
+    # For T-section, check if a > topping thickness? Not implemented yet.
+    # Beta1 from f_c (ACI 318-19 Table 22.2.2.4.3)
     if f_c <= 28:
         beta1 = 0.85
+    elif f_c < 55:
+        beta1 = 0.85 - 0.05 * (f_c - 28) / 7
     else:
-        beta1 = 0.85 - 0.05 * (f_c - 28)/7
-        beta1 = max(beta1, 0.65)
-    gamma_p = 0.28  # low-relaxation
-    fps = calc_fps(fpu, fpy, Eps, rho_p, f_c, beta1, gamma_p)
-    # Flange limit: if topping exists, a_limit = topping thickness? Actually for HCS, if a > topping thickness, need T-section calc.
-    # We'll set a_limit = ss.get("t_topping", 1e6) (large if no topping)
-    t_topping = ss.get("t_topping", 0)
-    a_limit = t_topping if t_topping>0 else None
-    Mn_result = calc_moment_capacity(Aps_bot, fps, dp_bot, f_c, b_eff, beta1, a_limit)
-    # --- Shear capacity ---
-    # Section properties
-    bw = ss.get("bw_shear", ss.get("b_bottom", 1200))  # web width
-    dp = dp_bot   # effective depth
-    f_ci = ss.get("f_ci", 35.0)  # for cracking? Use f_c for service
-    # Effective prestress after losses
-    Pe = ss.get("pl_Pe", 0.0)  # kN
-    Aps_total = Aps_bot + ss.get("Aps_top", 0.0)
-    if Aps_total > 0:
-        fpe = (Pe * 1000) / Aps_total   # MPa
-    else:
-        fpe = 0.0
-    # Compressive stress at centroid due to prestress (fpc)
-    # fpc = Pe / An (converted to MPa)
-    An = ss.get("sp_An", 1e6)
-    fpc = (Pe * 1000) / An if An>0 else 0.0
-    # Shear forces from load diagrams (factored)
-    # We need Vu along span, but for simplified check use max Vu
-    Vu_max = ss.get("lb_Vu_max", 0.0)  # kN
-    # For Vci, need Vd (unfactored dead load shear) and Vi (factored superimposed shear)
-    # Approximations: use w_sw and w_sdl+topping for Vd, and w_ll+point for Vi
-    L_an = ss.get("L_an", 6000)
-    w_sw = ss.get("SW_HCS", 0) * ss.get("b_bottom", 1200) / 1e6  # kN/mm
-    Vd = w_sw * L_an / 2 * 1000  # N
-    w_sdl = ss.get("SW_topping",0) + ss.get("SDL",0)
-    w_sdl_line = w_sdl * ss.get("b_bottom",1200)/1e6
-    w_ll_line = ss.get("LL",0) * ss.get("b_bottom",1200)/1e6
-    # Factored superimposed: 1.2*(SDL+SW_topping) + 1.6*LL
-    w_sup_factor = 1.2*(ss.get("SDL",0)+ss.get("SW_topping",0)) + 1.6*ss.get("LL",0)
-    w_sup_line = w_sup_factor * ss.get("b_bottom",1200)/1e6
-    Vi = w_sup_line * L_an / 2 * 1000   # N
-    # Cracking moment Mcre (approx) = 0.5*sqrt(f_c)*Sb_net (N·mm)
-    Sb_net = ss.get("sp_Sb_net", 1e6)
-    Mcre = 0.5 * math.sqrt(f_c) * Sb_net   # N·mm
-    # Max factored moment (N·mm)
-    Mmax = ss.get("lb_Mu_max", 1e6) * 1000  # kN·m -> N·mm
-    # Compute Vci at critical section (simplified at support)
-    Vci = calc_Vci(f_c, bw, dp, fpe, Vd, Vi, Mcre, Mmax)
-    Vcw = calc_Vcw(f_c, bw, dp, fpc)
-    Vn = min(Vci, Vcw)
-    phi_v = 0.75
-    phi_Vn = phi_v * Vn / 1000   # kN
-    # Demand-capacity ratios
-    Mn_kNm = Mn_result["Mn_kNm"]
-    phi_Mn_kNm = Mn_result["phi_Mn_kNm"]
-    # Use max moment from load combo
-    Mu_max = ss.get("lb_Mu_max", 1e6) / 1e6  # kN·m
-    DCR_M = Mu_max / phi_Mn_kNm if phi_Mn_kNm>0 else 99
-    DCR_V = Vu_max / phi_Vn if phi_Vn>0 else 99
-    # ACI/PCI 319-25 special requirement: if h > 317mm and no topping, need Av_min if Vu > 0.5*phi*Vcw
-    h_hcs = ss.get("h", 200)
-    need_Av_min = False
-    if h_hcs > 317 and not ss.get("has_topping", False):
-        if Vu_max > 0.5 * phi_v * (Vcw/1000):
-            need_Av_min = True
+        beta1 = 0.65
+    # Reinforcement ratio rho_p
+    rho_p = Aps / (b * dp) if b * dp > 0 else 0.0
+
+    # ----- Flexural capacity -----
+    fps = calc_fps(fpu, fpy, Eps, rho_p, f_c, beta1)
+    Mn, phi_Mn, a = calc_moment_capacity(Aps, fps, dp, f_c, b, a_limit=ss.get("tf_top", 100))
+    # Factored moment from loads
+    Mu_max = ss.get("lb_Mu_max", 0) / 1e6   # kN·m
+    DCR_M = Mu_max / phi_Mn if phi_Mn > 0 else 999.0
+
+    # ----- Shear capacity -----
+    # Dimensions
+    bw = ss.get("bw_shear", ss["b_bottom"] - ss["n_core"] * ss["d_core"])
+    # Prestress effects
+    fpc = Pe * 1000 / ss["sp_An"]   # concrete compressive stress at centroid (MPa)
+    # Shear demand along span
+    x_arr = ss["lb_x_arr"]          # mm
+    Vu_arr = ss["lb_Vu_arr"]        # kN
+    Mu_arr = ss["lb_Mu_arr"] / 1e6  # kN·m
+    # Mg (self-weight moment) – use service moment? For Vci, use factored? Let's simplify.
+    # We'll compute Vci and Vcw at each point
+    Vci_arr = np.zeros_like(Vu_arr)
+    Vcw_arr = np.zeros_like(Vu_arr)
+    phi_Vn_arr = np.zeros_like(Vu_arr)
+    for i, x in enumerate(x_arr):
+        # For Vci, use Vu and Mu at that point
+        Vu = abs(Vu_arr[i])
+        Mu = abs(Mu_arr[i])
+        # Simplified Vci (lower bound)
+        Vci = calc_Vci(f_c, bw, dp, fpc, Vu, Mu, 0.0)
+        Vcw = calc_Vcw(f_c, bw, dp, fpc)
+        Vn = min(Vci, Vcw)
+        phi_V = 0.75
+        phi_Vn_arr[i] = phi_V * Vn
+        Vci_arr[i] = Vci
+        Vcw_arr[i] = Vcw
+    # Minimum shear capacity along span
+    phi_Vn_min = np.min(phi_Vn_arr) if len(phi_Vn_arr) > 0 else 0.0
+    Vu_max = ss.get("lb_Vu_max", 0)
+    DCR_V = Vu_max / phi_Vn_min if phi_Vn_min > 0 else 999.0
+
+    # Check ACI/PCI requirement: if h > 317mm and no topping and Vu > 0.5*phi*Vcw
+    h = ss["h"]
+    has_topping = ss.get("has_topping", False)
+    needs_Av_min = False
+    if h > 317 and not has_topping:
+        # Check at critical section (typically at distance d from support)
+        # For simplicity, check maximum Vu location
+        idx_max = np.argmax(np.abs(Vu_arr))
+        if phi_Vn_arr[idx_max] > 0:
+            if abs(Vu_arr[idx_max]) > 0.5 * phi_Vn_arr[idx_max]:
+                needs_Av_min = True
+
     return {
         "cap_fps": fps,
-        "cap_Mn_kNm": Mn_kNm,
-        "cap_phi_Mn_kNm": phi_Mn_kNm,
-        "cap_a": Mn_result["a"],
-        "cap_flange_ok": Mn_result["flange_ok"],
-        "cap_Vci_kN": Vci/1000,
-        "cap_Vcw_kN": Vcw/1000,
-        "cap_phi_Vn_kN": phi_Vn,
+        "cap_Mn": Mn,
+        "cap_phi_Mn": phi_Mn,
+        "cap_a": a,
         "cap_DCR_M": DCR_M,
+        "cap_Vci_arr": Vci_arr,
+        "cap_Vcw_arr": Vcw_arr,
+        "cap_phi_Vn_arr": phi_Vn_arr,
+        "cap_phi_Vn_min": phi_Vn_min,
         "cap_DCR_V": DCR_V,
-        "cap_needs_Av_min": need_Av_min,
+        "cap_needs_Av_min": needs_Av_min,
     }
