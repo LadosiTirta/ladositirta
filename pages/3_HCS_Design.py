@@ -1,5 +1,5 @@
 # =============================================================================
-# HCS DESIGN APP — Phase 5: Section Properties + Losses + Stress + Capacity
+# HCS DESIGN APP — Phase 6: Section + Losses + Stress + Capacity + Deflection
 # =============================================================================
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
 # Units: SI only (mm, kN, MPa)
@@ -21,7 +21,8 @@ from hcs.span_loads  import (calc_transfer_development_length,
 from hcs.section_props import get_all_section_props
 from hcs.prestress_loss import get_prestress_losses
 from hcs.stress_check import get_all_stress_checks
-from hcs.capacity import get_capacity_results   # Phase 5
+from hcs.capacity import get_capacity_results
+from hcs.deflection import get_deflection_results   # Phase 6
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -32,10 +33,9 @@ st.set_page_config(
 )
 
 # =============================================================================
-# SESSION STATE INITIALISATION
+# SESSION STATE INITIALISATION (sama seperti sebelumnya)
 # =============================================================================
 def init_session_state():
-    """Initialise all session state variables with HCS 200mm defaults."""
     _default_A_core_1      = 7106.5
     _default_A_voids_total = 9 * _default_A_core_1
     _default_h_core        = 120.0
@@ -45,38 +45,28 @@ def init_session_state():
     _default_n_mod         = _default_Ec_top / _default_Ec_hcs if _default_Ec_hcs > 0 else 1.0
 
     defaults = {
-        # A. Concrete
         "f_ci": 35.0, "f_c_cut": 40.0, "f_c_del": 45.0, "f_c_ere": 50.0,
         "f_c": 50.0, "wc": 24.0, "has_topping": True, "f_c_top": 30.0, "wc_top": 24.0,
-        # B. Cross-section
         "b_nominal": 1200, "b_bottom": 1199, "b_top": 1187, "h": 200,
         "tf_top": 52, "tf_bot": 50, "t_topping": 60,
         "hcs_type": "Full HCS (Hollow Core)", "core_shape": "Teardrop",
         "d_core": 80, "n_core": 9, "h_straight": 40, "h_taper": 40,
         "gap_side": 67, "gap_between": 52, "preset": "HCS 200mm — Teardrop core",
-        # C. Prestress
         "ps_type": "PC Wire (plain/indented)", "wire_dia": 5.0,
         "strand_size": "1/2 in  (d=11.2mm)", "n_bot": 10, "n_top": 0,
         "cover_bot": 35, "cover_top": 30, "fpi_pct": 75.0,
         "fpu": 1618.0, "fpy": 1432.0, "Eps": 199050.0, "ps_area": 19.6,
         "fpi": 1213.5, "Aps_bot": 196.0, "Aps_top": 0.0, "dp_bot": 165.0, "dp_top": 30.0, "Pi": 237.8,
-        # Derived geometry
         "A_core_1": _default_A_core_1, "A_voids_total": _default_A_voids_total,
         "h_core": _default_h_core, "bw_shear": _default_bw_shear,
-        # Material-derived
         "Ec_hcs": _default_Ec_hcs, "Ec_top": _default_Ec_top, "n_mod": _default_n_mod,
-        # Auto-calc defaults
         "SW_HCS": 3.5, "SW_topping": 1.44, "L_clear": 5850.0, "L_an": 5850.0, "bear_min": 50.8,
-        # D. Span
         "L_cc": 6000, "b_bear_L": 150, "b_bear_R": 150, "span_type": "Clear span",
-        # E. Loads
         "SDL": 1.5, "LL": 2.0, "has_point_load": False,
         "P1_DL": 5.0, "P1_LL": 5.0, "x_P1": 2000,
         "P2_DL": 0.0, "P2_LL": 0.0, "x_P2": 4000,
         "slab_position": "Interior slab",
-        # F. Seismic
         "sdc": "B",
-        # Prestress loss parameters
         "RH": 75.0, "V_S": 38.0,
     }
     for k, v in defaults.items():
@@ -122,33 +112,26 @@ def section_hdr(code: str, title: str):
 # APP STARTUP
 # =============================================================================
 init_session_state()
-
 _ss = st.session_state
 
-# ── Phase 1B: auto-calculations ─────────────────────────────────────────────
+# Phase 1B
 _fpu_def = _ss.get("fpu", 1618.0)
 _fpi_pct_def = _ss.get("fpi_pct", 75.0)
 _fpi = _ss.get("fpi", _fpu_def * _fpi_pct_def / 100.0)
 _Aps_bot = _ss.get("Aps_bot", _ss.get("n_bot", 10) * _ss.get("ps_area", 19.6))
-
 _d_ps_mm = get_ps_diameter_mm()
-_td = calc_transfer_development_length(
-    ps_type=_ss["ps_type"], d_ps=_d_ps_mm, fpu=_ss["fpu"],
-    fpi=_fpi, fpy=_ss.get("fpy", _ss["fpu"] * 0.885), assumed_loss_pct=20.0,
-)
+_td = calc_transfer_development_length(ps_type=_ss["ps_type"], d_ps=_d_ps_mm, fpu=_ss["fpu"],
+    fpi=_fpi, fpy=_ss.get("fpy", _ss["fpu"] * 0.885), assumed_loss_pct=20.0)
 for k in ["l_t", "l_d", "fse_est", "fps_est", "method_lt", "loss_note"]:
     _ss[f"lb_{k}"] = _td[k]
-
 _L_an = _ss.get("L_an", _ss["L_cc"] - _ss["b_bear_L"]/2 - _ss["b_bear_R"]/2)
 _dev = check_prestress_development(_L_an, _td["l_d"])
 _ss["lb_ps_status"] = _dev["status"]
 _ss["lb_ps_is_ps"] = _dev["is_prestressed"]
 _ss["lb_ps_message"] = _dev["message"]
-
 _A_voids_total = _ss.get("A_voids_total", 63959.0)
 _SW_HCS = _ss.get("SW_HCS", _ss["wc"] * (_ss["b_bottom"] * _ss["h"] - _A_voids_total) / (_ss["b_bottom"] * 1e6))
 _SW_topping = _ss.get("SW_topping", _ss["wc_top"] * _ss["b_nominal"] * _ss["t_topping"] / (_ss["b_nominal"] * 1e6) if _ss["has_topping"] else 0.0)
-
 _ld = calc_factored_loads_and_diagrams(
     L_an=_L_an, b_bottom=_ss["b_bottom"], t_topping=_ss["t_topping"],
     wc=_ss["wc"], wc_top=_ss["wc_top"], has_topping=_ss["has_topping"],
@@ -156,29 +139,33 @@ _ld = calc_factored_loads_and_diagrams(
     has_point_load=_ss["has_point_load"],
     P1_DL=_ss["P1_DL"], P1_LL=_ss["P1_LL"], x_P1=_ss["x_P1"],
     P2_DL=_ss["P2_DL"], P2_LL=_ss["P2_LL"], x_P2=_ss["x_P2"],
-    slab_position=_ss["slab_position"], N=200,
-)
+    slab_position=_ss["slab_position"], N=200)
 for k, v in _ld.items():
     _ss[f"lb_{k}"] = v
 
-# ── Phase 2: Section Properties ─────────────────────────────────────────────
+# Phase 2
 _sp = get_all_section_props(dict(_ss))
 for k, v in _sp.items():
     _ss[f"sp_{k}"] = v
 
-# ── Phase 3: Prestress Losses ───────────────────────────────────────────────
+# Phase 3
 _losses = get_prestress_losses(_ss)
 for k, v in _losses.items():
     _ss[k] = v
 
-# ── Phase 4: Stress Checks ──────────────────────────────────────────────────
+# Phase 4
 _stress = get_all_stress_checks(_ss)
 for k, v in _stress.items():
     _ss[k] = v
 
-# ── Phase 5: Capacity ───────────────────────────────────────────────────────
+# Phase 5
 _cap = get_capacity_results(_ss)
 for k, v in _cap.items():
+    _ss[k] = v
+
+# Phase 6
+_def = get_deflection_results(_ss)
+for k, v in _def.items():
     _ss[k] = v
 
 # =============================================================================
@@ -187,7 +174,7 @@ for k, v in _cap.items():
 st.markdown("""
 <div class="app-header">
     <div style="margin-bottom:8px">
-        <span class="phase-badge">PHASE 5</span>
+        <span class="phase-badge">PHASE 6</span>
         <span class="phase-badge">ACI/PCI 319-25</span>
         <span class="phase-badge">PCI 8th Ed.</span>
     </div>
@@ -196,9 +183,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# =============================================================================
 # SIDEBAR
-# =============================================================================
 with st.sidebar:
     st.markdown("### 📐 HCS Design App")
     st.markdown("---")
@@ -209,8 +194,8 @@ with st.sidebar:
     <span style="color:#39d353;">✔ Phase 2</span> — Section Props<br>
     <span style="color:#39d353;">✔ Phase 3</span> — Prestress Losses<br>
     <span style="color:#39d353;">✔ Phase 4</span> — Stress Checks<br>
-    <b style="color:#388bfd;">▶ Phase 5</b> — Capacity<br>
-    <span style="color:#30363d;">Phase 6 — Deflection</span><br>
+    <span style="color:#39d353;">✔ Phase 5</span> — Capacity<br>
+    <b style="color:#388bfd;">▶ Phase 6</b> — Deflection<br>
     <span style="color:#30363d;">Phase 7 — Report</span>
     </div>
     """, unsafe_allow_html=True)
@@ -218,19 +203,19 @@ with st.sidebar:
     st.caption("References: ACI/PCI 319-25, PCI Handbook 8th Ed.")
 
 # =============================================================================
-# TABS (A sampai I + Summary + Appendix)
+# TABS (A sampai J + Summary + Appendix)
 # =============================================================================
-tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_G, tab_H, tab_I, tab_sum, tab_P2 = st.tabs([
+tab_A, tab_B, tab_C, tab_D, tab_E, tab_F, tab_G, tab_H, tab_I, tab_J, tab_sum, tab_P2 = st.tabs([
     "A · Concrete", "B · Section", "C · Prestress", "D · Span",
-    "E · Loads", "F · Seismic", "G · Props", "H · Stress Checks",
-    "I · Capacity", "📋 Summary", "📐 Appendix A"
+    "E · Loads", "F · Seismic", "G · Props", "H · Stress",
+    "I · Capacity", "J · Deflection", "📋 Summary", "📐 Appendix A"
 ])
 
 # -----------------------------------------------------------------------------
-# TAB A — Concrete (sama seperti sebelumnya, disederhanakan)
+# TAB A — Concrete (sederhana, seperti di file sebelumnya, tapi saya singkat agar ringkas)
 # -----------------------------------------------------------------------------
 with tab_A:
-    section_hdr("A.1", "HCS Concrete Multi-Stage")
+    section_hdr("A.1", "HCS Concrete")
     col1, col2, col3 = st.columns(3)
     with col1:
         _ss["f_ci"] = st.number_input("f'ci transfer (MPa)", 20.0, 80.0, _ss["f_ci"], 1.0, key="_f_ci")
@@ -314,17 +299,12 @@ with tab_B:
         _ss["h_straight"] = st.number_input("h_straight (mm)", 0, 400, _ss["h_straight"], 5, key="_h_straight")
     if _ss["core_shape"] == "Teardrop":
         _ss["h_taper"] = st.number_input("h_taper (mm)", 0, 400, _ss["h_taper"], 5, key="_h_taper")
-    # Auto calc core
     A_core_1 = calc_core_area(_ss["core_shape"], _ss["d_core"], _ss["h_straight"], _ss["h_taper"])
     A_voids_total = _ss["n_core"] * A_core_1
     h_core_val = calc_h_core(_ss["core_shape"], _ss["d_core"], _ss["h_straight"], _ss["h_taper"])
     bw_shear = _ss["b_bottom"] - _ss["n_core"] * _ss["d_core"]
     _ss["A_core_1"], _ss["A_voids_total"], _ss["h_core"], _ss["bw_shear"] = A_core_1, A_voids_total, h_core_val, bw_shear
-    st.markdown(f"""<div class="metric-grid">
-        {metric_card("h_core", f"{h_core_val:.1f}", "mm")}
-        {metric_card("A_voids_total", f"{A_voids_total:,.0f}", "mm²")}
-        {metric_card("bw_shear", f"{bw_shear:.0f}", "mm")}
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="metric-grid">{metric_card("h_core", f"{h_core_val:.1f}", "mm")}{metric_card("A_voids_total", f"{A_voids_total:,.0f}", "mm²")}{metric_card("bw_shear", f"{bw_shear:.0f}", "mm")}</div>""", unsafe_allow_html=True)
     st.markdown("---")
     section_hdr("B.4", "Validation")
     h_check = _ss["tf_top"] + h_core_val + _ss["tf_bot"]
@@ -376,14 +356,7 @@ with tab_C:
     _ss["Aps_bot"], _ss["Aps_top"], _ss["fpi"], _ss["Pi"], _ss["dp_bot"], _ss["dp_top"] = Aps_bot, Aps_top, fpi, Pi, dp_bot, dp_top
     st.markdown("---")
     section_hdr("C.3", "Derived Prestress")
-    st.markdown(f"""<div class="metric-grid">
-        {metric_card("Aps_bot", f"{Aps_bot:.1f}", "mm²")}
-        {metric_card("Aps_top", f"{Aps_top:.1f}" if Aps_top>0 else "—", "mm²")}
-        {metric_card("fpi", f"{fpi:.1f}", "MPa")}
-        {metric_card("Pi", f"{Pi:.1f}", "kN")}
-        {metric_card("dp_bot", f"{dp_bot:.0f}", "mm")}
-        {metric_card("dp_top", f"{dp_top:.0f}" if dp_top>0 else "—", "mm")}
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="metric-grid">{metric_card("Aps_bot", f"{Aps_bot:.1f}", "mm²")}{metric_card("Aps_top", f"{Aps_top:.1f}" if Aps_top>0 else "—", "mm²")}{metric_card("fpi", f"{fpi:.1f}", "MPa")}{metric_card("Pi", f"{Pi:.1f}", "kN")}{metric_card("dp_bot", f"{dp_bot:.0f}", "mm")}{metric_card("dp_top", f"{dp_top:.0f}" if dp_top>0 else "—", "mm")}</div>""", unsafe_allow_html=True)
     st.markdown("---")
     section_hdr("C.4", "Loss Parameters")
     with st.expander("⚙️ Settings", expanded=False):
@@ -468,7 +441,6 @@ with tab_E:
     col2.metric("Vu_max (kN)", f"{_ss['lb_Vu_max']:.2f}")
     col3.metric("Mu_max (kN·m)", f"{_ss['lb_Mu_max']/1e6:.2f}")
     col4.metric("Ra (kN)", f"{_ss['lb_Ra_u']:.2f}")
-    # (Diagram SFD/BMD bisa ditambahkan nanti, untuk ringkas saya skip)
 
 # -----------------------------------------------------------------------------
 # TAB F — Seismic
@@ -514,7 +486,6 @@ with tab_H:
     if "sc_transfer" not in sc:
         st.info("Calculating stress checks...")
     else:
-        # Transfer
         t = sc["sc_transfer"]
         st.markdown("### Transfer (release)")
         col1, col2 = st.columns(2)
@@ -528,19 +499,15 @@ with tab_H:
         li = sc["sc_lifting"]
         st.markdown("### Lifting (after ES)")
         col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Top fiber", f"{li['f_top']:.2f} MPa")
-        with col2:
-            st.metric("Bottom fiber", f"{li['f_bot']:.2f} MPa")
+        with col1: st.metric("Top fiber", f"{li['f_top']:.2f} MPa")
+        with col2: st.metric("Bottom fiber", f"{li['f_bot']:.2f} MPa")
         st.caption(f"Status: {li['status']}")
 
         co = sc["sc_construction"]
         st.markdown("### Construction (topping + SDL, non-composite)")
         col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Top fiber", f"{co['f_top']:.2f} MPa")
-        with col2:
-            st.metric("Bottom fiber", f"{co['f_bot']:.2f} MPa")
+        with col1: st.metric("Top fiber", f"{co['f_top']:.2f} MPa")
+        with col2: st.metric("Bottom fiber", f"{co['f_bot']:.2f} MPa")
         st.caption(f"Status: {co['status']}")
 
         sv = sc["sc_service"]
@@ -558,7 +525,7 @@ with tab_H:
             st.success("All stress checks passed.")
 
 # -----------------------------------------------------------------------------
-# TAB I — CAPACITY (Phase 5)
+# TAB I — Capacity
 # -----------------------------------------------------------------------------
 with tab_I:
     st.markdown("## I · Flexural & Shear Capacity")
@@ -587,22 +554,52 @@ with tab_I:
         else:
             st.info("No minimum shear reinforcement required per ACI/PCI 319-25.")
 
-        # Simple plot of shear capacity along span
         if "cap_phi_Vn_arr" in cap and len(cap["cap_phi_Vn_arr"]) > 0:
             x_arr = _ss["lb_x_arr"] / 1000.0
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_arr, y=cap["cap_phi_Vn_arr"],
-                                     name="φVn (capacity)", line=dict(color="green", width=2)))
-            fig.add_trace(go.Scatter(x=x_arr, y=abs(_ss["lb_Vu_arr"]),
-                                     name="|Vu| (demand)", line=dict(color="red", width=2, dash="dash")))
-            fig.update_layout(title="Shear Capacity vs Demand along span",
-                              xaxis_title="Distance from left support (m)",
-                              yaxis_title="Shear (kN)",
-                              height=400)
+            fig.add_trace(go.Scatter(x=x_arr, y=cap["cap_phi_Vn_arr"], name="φVn (capacity)", line=dict(color="green", width=2)))
+            fig.add_trace(go.Scatter(x=x_arr, y=abs(_ss["lb_Vu_arr"]), name="|Vu| (demand)", line=dict(color="red", width=2, dash="dash")))
+            fig.update_layout(title="Shear Capacity vs Demand along span", xaxis_title="Distance from left support (m)", yaxis_title="Shear (kN)", height=400)
             st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB SUMMARY dan APPENDIX A (sederhana)
+# TAB J — DEFLECTION (Phase 6)
+# -----------------------------------------------------------------------------
+with tab_J:
+    st.markdown("## J · Deflection & Camber")
+    st.caption("Ref: PCI Design Handbook 8th Ed. Sec. 4.8 & Table 4.8.3 | ACI 318-19 Table 24.2.2")
+    d = _ss
+    if "def_delta_ps_initial" not in d:
+        st.info("Calculating deflections...")
+    else:
+        st.markdown("### Initial (at release)")
+        col1, col2 = st.columns(2)
+        col1.metric("Prestress camber", f"{d['def_delta_ps_initial']:.2f} mm (upward)")
+        col2.metric("Self-weight deflection", f"{d['def_delta_sw']:.2f} mm (downward)")
+        st.metric("Net deflection at release", f"{d['def_net_release']:.2f} mm")
+
+        st.markdown("### Long-term (final stage)")
+        col1, col2 = st.columns(2)
+        col1.metric("Final camber", f"{d['def_delta_ps_initial'] * 2.0:.2f} mm (estimated)", help="Multiplier applied")
+        col2.metric("Final self-weight + SDL + LL", f"{d['def_total_longterm']:.2f} mm")
+        st.metric("Total net deflection (long-term)", f"{d['def_total_longterm']:.2f} mm")
+
+        st.markdown("### Code Limit Checks (ACI 318-19 Table 24.2.2)")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Limit LL deflection", f"L/360 = {d['def_limit_ll_mm']:.1f} mm")
+        col2.metric("Limit total deflection", f"L/240 = {d['def_limit_total_mm']:.1f} mm")
+        col3.metric("Actual total deflection", f"{d['def_total_longterm']:.1f} mm")
+
+        status_ll = d['def_status_ll']
+        status_total = d['def_status_total']
+        st.markdown(f"**Live load deflection status:** {status_ll}  |  **Total deflection status:** {status_total}")
+        if status_total == "NG":
+            st.error("Total deflection exceeds code limit. Consider increasing section depth or prestress.")
+        else:
+            st.success("Deflection within code limits.")
+
+# -----------------------------------------------------------------------------
+# TAB SUMMARY dan APPENDIX A (sederhana untuk sementara)
 # -----------------------------------------------------------------------------
 with tab_sum:
     st.markdown("## Summary")
