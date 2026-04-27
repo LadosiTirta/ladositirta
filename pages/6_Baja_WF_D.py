@@ -262,4 +262,4 @@ st.subheader("5️⃣ Kapasitas Geser")
 st.dataframe(df5, use_container_width=True, hide_index=True)
 
 st.markdown("---")
-st.caption("Perhitungan ini di-generate oleh DeepSeek.")
+st.caption("selalu cek hasil yang diberikan.")
