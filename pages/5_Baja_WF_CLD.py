@@ -314,7 +314,7 @@ def warnai_klas(val):
     return ""
 
 st.dataframe(
-    df2.style.applymap(warnai_klas, subset=["Nilai"]),
+    df2.style.map(warnai_klas, subset=["Nilai"]),
     use_container_width=True, hide_index=True
 )
 
@@ -348,7 +348,7 @@ def warnai_kondisi(val):
     return ""
 
 st.dataframe(
-    df3.style.applymap(warnai_kondisi, subset=["Nilai"]),
+    df3.style.map(warnai_kondisi, subset=["Nilai"]),
     use_container_width=True, hide_index=True
 )
 
