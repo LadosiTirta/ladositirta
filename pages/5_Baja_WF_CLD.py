@@ -8,6 +8,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+from io import BytesIO
+import datetime
+from docx import Document
+from docx.shared import Pt, RGBColor, Inches, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from fpdf import FPDF
 # ============================================================
 # FUNGSI PERHITUNGAN
 # ============================================================
@@ -217,7 +224,367 @@ def format_val(v, dec=3):
     if abs(v) >= 1e3:
         return f"{v/1e3:.{dec}f} ×10³"
     return f"{v:.{dec}f}"
-
+# ── SANITASI UNICODE → ASCII (untuk fpdf2) ─────────────────
+def sanitasi_pdf(teks: str) -> str:
+    """
+    Ganti karakter Unicode/Yunani yang tidak didukung font PDF standar
+    menjadi representasi ASCII yang terbaca.
+    """
+    if not isinstance(teks, str):
+        teks = str(teks)
+    tabel = [
+        # Simbol Yunani & matematika
+        ("φ",  "phi"),   ("Φ",  "Phi"),
+        ("λ",  "lambda"),("Λ",  "Lambda"),
+        ("Ω",  "Omega"), ("ω",  "omega"),
+        ("π",  "pi"),    ("Π",  "Pi"),
+        ("α",  "alpha"), ("β",  "beta"),
+        ("γ",  "gamma"), ("δ",  "delta"),
+        ("σ",  "sigma"), ("ε",  "epsilon"),
+        ("μ",  "mu"),    ("ρ",  "rho"),
+        # Superscript
+        ("²",  "^2"),    ("³",  "^3"),
+        ("⁴",  "^4"),    ("⁶",  "^6"),
+        ("⁹",  "^9"),
+        # Operator & tanda khusus
+        ("×",  "x"),     ("·",  "."),
+        ("√",  "sqrt"),  ("≤",  "<="),
+        ("≥",  ">="),    ("≠",  "!="),
+        ("→",  "->"),    ("←",  "<-"),
+        ("−",  "-"),     ("—",  "--"),
+        ("≈",  "~="),
+        # Emoji angka (subheader tabel)
+        ("1️⃣", "1."), ("2️⃣", "2."), ("3️⃣", "3."),
+        ("4️⃣", "4."), ("5️⃣", "5."),
+        # Simbol satuan
+        ("°",  "deg"),
+    ]
+    for asli, ganti in tabel:
+        teks = teks.replace(asli, ganti)
+    # Hapus sisa karakter non-latin1 yang mungkin lolos
+    teks = teks.encode("latin-1", errors="replace").decode("latin-1")
+    return teks
+ 
+ 
+# ── GENERATOR WORD (.docx) ─────────────────────────────────
+def generate_word(
+    daftar_tabel: list,          # list of (judul_str, dataframe)
+    info_input: dict,            # dict parameter input untuk header laporan
+) -> BytesIO:
+    """
+    Buat laporan Word lengkap dengan loop otomatis atas semua tabel.
+    Mengembalikan BytesIO siap pakai untuk st.download_button.
+    """
+    doc = Document()
+ 
+    # ── Margin halaman ──────────────────────────────────────
+    for section in doc.sections:
+        section.top_margin    = Cm(2.0)
+        section.bottom_margin = Cm(2.0)
+        section.left_margin   = Cm(2.5)
+        section.right_margin  = Cm(2.5)
+ 
+    # ── Header Laporan ──────────────────────────────────────
+    judul = doc.add_heading("LAPORAN PERHITUNGAN", level=0)
+    judul.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    judul.runs[0].font.size = Pt(16)
+    judul.runs[0].font.color.rgb = RGBColor(0x1A, 0x3A, 0x5C)
+ 
+    sub = doc.add_heading("Kapasitas Penampang Baja Profil WF", level=1)
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub.runs[0].font.size = Pt(13)
+    sub.runs[0].font.color.rgb = RGBColor(0x1A, 0x3A, 0x5C)
+ 
+    ref = doc.add_paragraph("Referensi: SNI 1729:2020 & AISC 360-16  |  Metode: LRFD & ASD")
+    ref.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    ref.runs[0].font.size = Pt(9)
+    ref.runs[0].font.italic = True
+ 
+    tgl = doc.add_paragraph(f"Tanggal: {datetime.date.today().strftime('%d %B %Y')}")
+    tgl.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tgl.runs[0].font.size = Pt(9)
+ 
+    doc.add_paragraph()
+ 
+    # ── Tabel Ringkasan Input ───────────────────────────────
+    doc.add_heading("Data Input", level=2)
+    tbl_input = doc.add_table(rows=1, cols=2)
+    tbl_input.style = "Table Grid"
+    tbl_input.alignment = WD_TABLE_ALIGNMENT.LEFT
+ 
+    hdr = tbl_input.rows[0].cells
+    hdr[0].text = "Parameter"
+    hdr[1].text = "Nilai"
+    for cell in hdr:
+        cell.paragraphs[0].runs[0].bold = True
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+ 
+    for k, v in info_input.items():
+        row = tbl_input.add_row().cells
+        row[0].text = k
+        row[1].text = v
+ 
+    doc.add_paragraph()
+ 
+    # ── Loop Otomatis Semua Tabel Hasil ─────────────────────
+    for judul_tbl, df in daftar_tabel:
+        # Heading tabel
+        h = doc.add_heading(judul_tbl, level=2)
+        h.runs[0].font.color.rgb = RGBColor(0x1A, 0x3A, 0x5C)
+ 
+        cols = list(df.columns)
+        n_cols = len(cols)
+        n_rows = len(df)
+ 
+        # Buat tabel Word: 1 baris header + n_rows baris data
+        tbl = doc.add_table(rows=1 + n_rows, cols=n_cols)
+        tbl.style = "Table Grid"
+        tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+ 
+        # Set lebar kolom (total ~16 cm untuk margin 2.5 cm kiri-kanan)
+        lebar = [Cm(3.5), Cm(4.5), Cm(1.8), Cm(6.2)]  # Parameter|Nilai|Satuan|Keterangan
+        for i, cell in enumerate(tbl.rows[0].cells):
+            cell.width = lebar[i] if i < len(lebar) else Cm(3)
+ 
+        # Baris header kolom
+        for ci, nama_col in enumerate(cols):
+            cell = tbl.rows[0].cells[ci]
+            cell.text = nama_col
+            run = cell.paragraphs[0].runs[0]
+            run.bold = True
+            run.font.size = Pt(9)
+            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            # Background biru tua via XML shading
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), "1A3A5C")
+            tcPr.append(shd)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+ 
+        # Baris data
+        for ri, (_, row_data) in enumerate(df.iterrows()):
+            word_row = tbl.rows[ri + 1]
+            for ci, val in enumerate(row_data):
+                cell = word_row.cells[ci]
+                cell.text = str(val)
+                run = cell.paragraphs[0].runs[0]
+                run.font.size = Pt(8.5)
+                # Baris bergantian warna (zebra)
+                if ri % 2 == 1:
+                    from docx.oxml.ns import qn
+                    from docx.oxml import OxmlElement
+                    tc = cell._tc
+                    tcPr = tc.get_or_add_tcPr()
+                    shd = OxmlElement("w:shd")
+                    shd.set(qn("w:val"), "clear")
+                    shd.set(qn("w:color"), "auto")
+                    shd.set(qn("w:fill"), "EEF3F8")
+                    tcPr.append(shd)
+                cell.paragraphs[0].alignment = (
+                    WD_ALIGN_PARAGRAPH.CENTER if ci in (1, 2)
+                    else WD_ALIGN_PARAGRAPH.LEFT
+                )
+ 
+        doc.add_paragraph()   # spasi antar tabel
+ 
+    # ── Footer Catatan ──────────────────────────────────────
+    doc.add_heading("Catatan & Asumsi", level=2)
+    catatan_list = [
+        "Properties Penampang: Luas fillet diperhitungkan dengan pendekatan 0.8584.r^2 per sudut (4 sudut total).",
+        "Klasifikasi: Menggunakan Tabel B4.1b AISC 360-16 (elemen dalam lentur).",
+        "Kapasitas Momen (LTB): Menggunakan Pasal F2 AISC 360-16 untuk profil WF kompak simetris ganda.",
+        "Kapasitas Geser: Menggunakan Pasal G2.1 AISC 360-16. kv = 5.34 (badan tanpa pengaku, a/h > 3.0).",
+        "Warping constant (Cw): Cw = Iy.ho^2/4 (pendekatan untuk WF simetris ganda).",
+        "Torsional constant (J): Tanpa koreksi fillet (konservatif).",
+        "Semua input dalam N dan mm; output dalam N.mm dan kN.m / kN.",
+        "Dokumen ini dibuat otomatis. Selalu verifikasi dengan software resmi untuk keperluan desain.",
+    ]
+    for c in catatan_list:
+        p = doc.add_paragraph(c, style="List Bullet")
+        p.runs[0].font.size = Pt(8.5)
+ 
+    # ── Simpan ke BytesIO ───────────────────────────────────
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+ 
+ 
+# ── GENERATOR PDF (fpdf2, Landscape) ──────────────────────
+class PDFLaporan(FPDF):
+    """Subclass FPDF dengan header & footer kustom."""
+ 
+    def __init__(self, info_input: dict):
+        super().__init__(orientation="L", unit="mm", format="A4")
+        self.info_input = info_input
+        self.set_auto_page_break(auto=True, margin=15)
+        self.set_margins(left=15, top=15, right=15)
+ 
+    def header(self):
+        self.set_font("Helvetica", "B", 11)
+        self.set_text_color(26, 58, 92)   # biru tua
+        self.cell(0, 7, "LAPORAN PERHITUNGAN - KAPASITAS PENAMPANG BAJA PROFIL WF",
+                  align="C", new_x="LMARGIN", new_y="NEXT")
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(80, 80, 80)
+        self.cell(0, 5, "Referensi: SNI 1729:2020 & AISC 360-16  |  Metode: LRFD & ASD",
+                  align="C", new_x="LMARGIN", new_y="NEXT")
+        self.ln(2)
+        # Garis pembatas header
+        self.set_draw_color(26, 58, 92)
+        self.set_line_width(0.5)
+        self.line(self.l_margin, self.get_y(),
+                  self.w - self.r_margin, self.get_y())
+        self.ln(3)
+        self.set_text_color(0, 0, 0)
+ 
+    def footer(self):
+        self.set_y(-12)
+        self.set_font("Helvetica", "I", 7)
+        self.set_text_color(120, 120, 120)
+        tgl = datetime.date.today().strftime("%d %B %Y")
+        self.cell(0, 5,
+                  f"Halaman {self.page_no()} | Dicetak: {tgl} | "
+                  "Verifikasi dengan software resmi sebelum digunakan untuk desain.",
+                  align="C")
+ 
+ 
+def generate_pdf(
+    daftar_tabel: list,
+    info_input: dict,
+) -> BytesIO:
+    """
+    Buat laporan PDF landscape lengkap dengan loop otomatis atas semua tabel.
+    Mengembalikan BytesIO siap pakai untuk st.download_button.
+    """
+    pdf = PDFLaporan(info_input)
+    pdf.add_page()
+ 
+    # ── Lebar total area cetak (A4 landscape: 297mm - 30mm margin) ──
+    W = pdf.w - pdf.l_margin - pdf.r_margin   # ~267 mm
+ 
+    # Proporsi lebar 4 kolom: Parameter | Nilai | Satuan | Keterangan
+    lebar_kol = [W * 0.14, W * 0.22, W * 0.09, W * 0.55]
+ 
+    # ── Tabel Ringkasan Input ───────────────────────────────
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(26, 58, 92)
+    pdf.cell(0, 6, "DATA INPUT", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+ 
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_fill_color(26, 58, 92)
+    pdf.set_text_color(255, 255, 255)
+    w_k = W * 0.40
+    w_v = W * 0.60
+    pdf.cell(w_k, 6, "Parameter", border=1, fill=True, align="C")
+    pdf.cell(w_v, 6, "Nilai", border=1, fill=True, align="C",
+             new_x="LMARGIN", new_y="NEXT")
+ 
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(0, 0, 0)
+    for idx, (k, v) in enumerate(info_input.items()):
+        fill = (idx % 2 == 1)
+        pdf.set_fill_color(238, 243, 248) if fill else pdf.set_fill_color(255, 255, 255)
+        pdf.cell(w_k, 5.5, sanitasi_pdf(k), border=1, fill=fill)
+        pdf.cell(w_v, 5.5, sanitasi_pdf(v), border=1, fill=fill,
+                 new_x="LMARGIN", new_y="NEXT")
+ 
+    pdf.ln(5)
+ 
+    # ── Loop Otomatis Semua Tabel Hasil ─────────────────────
+    for judul_tbl, df in daftar_tabel:
+        # Cek apakah cukup ruang untuk setidaknya judul + header + 2 baris data
+        tinggi_min = 6 + 6 + 2 * 5.5
+        if pdf.get_y() + tinggi_min > pdf.h - pdf.b_margin:
+            pdf.add_page()
+ 
+        # Judul tabel
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(26, 58, 92)
+        pdf.cell(0, 6, sanitasi_pdf(judul_tbl),
+                 new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+ 
+        cols = list(df.columns)
+ 
+        # Header kolom
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_fill_color(26, 58, 92)
+        pdf.set_text_color(255, 255, 255)
+        for ci, nama_col in enumerate(cols):
+            pdf.cell(lebar_kol[ci], 6, sanitasi_pdf(nama_col),
+                     border=1, fill=True, align="C")
+        pdf.ln()
+ 
+        # Baris data
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(0, 0, 0)
+        for ri, (_, row_data) in enumerate(df.iterrows()):
+            # Cek page break sebelum setiap baris
+            if pdf.get_y() + 5.5 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                # Ulang header kolom setelah page break
+                pdf.set_font("Helvetica", "I", 7)
+                pdf.set_text_color(100, 100, 100)
+                pdf.cell(0, 4,
+                         f"(lanjutan) {sanitasi_pdf(judul_tbl)}",
+                         new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font("Helvetica", "B", 7.5)
+                pdf.set_fill_color(26, 58, 92)
+                pdf.set_text_color(255, 255, 255)
+                for ci, nama_col in enumerate(cols):
+                    pdf.cell(lebar_kol[ci], 6, sanitasi_pdf(nama_col),
+                             border=1, fill=True, align="C")
+                pdf.ln()
+                pdf.set_font("Helvetica", "", 7.5)
+                pdf.set_text_color(0, 0, 0)
+ 
+            fill = (ri % 2 == 1)
+            pdf.set_fill_color(238, 243, 248) if fill else pdf.set_fill_color(255, 255, 255)
+            vals = list(row_data)
+            for ci, val in enumerate(vals):
+                txt = sanitasi_pdf(str(val))
+                align = "C" if ci in (1, 2) else "L"
+                pdf.cell(lebar_kol[ci], 5.5, txt,
+                         border=1, fill=fill, align=align)
+            pdf.ln()
+ 
+        pdf.ln(4)   # spasi antar tabel
+ 
+    # ── Catatan ─────────────────────────────────────────────
+    if pdf.get_y() + 40 > pdf.h - pdf.b_margin:
+        pdf.add_page()
+ 
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(26, 58, 92)
+    pdf.cell(0, 6, "CATATAN & ASUMSI", new_x="LMARGIN", new_y="NEXT")
+ 
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(0, 0, 0)
+    catatan_list = [
+        "Properties Penampang: Luas fillet diperhitungkan dengan pendekatan 0.8584 x r^2 per sudut (4 sudut total).",
+        "Klasifikasi: Menggunakan Tabel B4.1b AISC 360-16 (elemen dalam lentur).",
+        "Kapasitas Momen (LTB): Menggunakan Pasal F2 AISC 360-16 untuk profil WF kompak simetris ganda.",
+        "Kapasitas Geser: Menggunakan Pasal G2.1 AISC 360-16. kv = 5.34 (badan tanpa pengaku, a/h > 3.0).",
+        "Warping constant (Cw): Cw = Iy.ho^2/4. Torsional constant (J): Tanpa koreksi fillet (konservatif).",
+        "Semua input dalam N dan mm; output dalam N.mm dan kN.m / kN.",
+        "Dokumen ini dibuat otomatis. Selalu verifikasi dengan software resmi untuk desain.",
+    ]
+    for c in catatan_list:
+        pdf.cell(4, 5.5, "-", border=0)
+        pdf.multi_cell(W - 4, 5.5, sanitasi_pdf(c), border=0)
+ 
+    # ── Output ke BytesIO ────────────────────────────────────
+    buf = BytesIO()
+    buf.write(pdf.output())
+    buf.seek(0)
+    return buf
 
 # ============================================================
 # MAIN APP
@@ -417,3 +784,60 @@ with st.expander("📋 Catatan & Asumsi Perhitungan"):
     """)
 
 st.caption("Dibuat dengan Python + Streamlit | Untuk keperluan engineering, selalu verifikasi dengan software resmi.")
+st.markdown("---")
+st.subheader("⬇️ Download Laporan")
+ 
+# Susun daftar tabel: (judul_string, dataframe) — loop otomatis
+daftar_tabel_laporan = [
+    ("1. Properties Penampang",         df1),
+    ("2. Klasifikasi Penampang",         df2),
+    ("3. Parameter Tekuk Lateral (LTB)", df3),
+    ("4. Kapasitas Momen",              df4),
+    ("5. Kapasitas Geser",              df5),
+]
+ 
+# Info input untuk header laporan
+info_input_laporan = {
+    "Fy - Tegangan Leleh":          f"{Fy:.0f} MPa",
+    "Fu - Tegangan Tarik":          f"{Fu:.0f} MPa",
+    "E  - Modulus Elastisitas":     f"{E:.0f} MPa",
+    "d  - Tinggi Total":            f"{d:.0f} mm",
+    "bf - Lebar Sayap":             f"{bf:.0f} mm",
+    "tw - Tebal Badan":             f"{tw:.1f} mm",
+    "tf - Tebal Sayap":             f"{tf:.1f} mm",
+    "r  - Radius Fillet":           f"{r:.1f} mm",
+    "Lb - Panjang Tdk Terbreis":    f"{Lb:.0f} mm",
+    "Cb - Faktor Modifikasi Momen": f"{Cb:.2f}",
+    "phi.Mn (LRFD)":                f"{phi_m * mom['Mn'] / 1e6:.3f} kN.m",
+    "Mn/Omega (ASD)":               f"{mom['Mn'] / (Omega_m * 1e6):.3f} kN.m",
+    "phi.Vn (LRFD)":                f"{phi_v * gsr['Vn'] / 1e3:.3f} kN",
+    "Vn/Omega (ASD)":               f"{gsr['Vn'] / (Omega_v * 1e3):.3f} kN",
+}
+ 
+col_dl1, col_dl2 = st.columns(2)
+ 
+with col_dl1:
+    if st.button("📄 Generate & Download Word (.docx)"):
+        with st.spinner("Membuat dokumen Word..."):
+            word_buf = generate_word(daftar_tabel_laporan, info_input_laporan)
+        nama_file_word = f"WF_d{int(d)}xbf{int(bf)}_SNI1729.docx"
+        st.download_button(
+            label="💾 Klik untuk Simpan Word",
+            data=word_buf,
+            file_name=nama_file_word,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+ 
+with col_dl2:
+    if st.button("📑 Generate & Download PDF (.pdf)"):
+        with st.spinner("Membuat dokumen PDF..."):
+            pdf_buf = generate_pdf(daftar_tabel_laporan, info_input_laporan)
+        nama_file_pdf = f"WF_d{int(d)}xbf{int(bf)}_SNI1729.pdf"
+        st.download_button(
+            label="💾 Klik untuk Simpan PDF",
+            data=pdf_buf,
+            file_name=nama_file_pdf,
+            mime="application/pdf",
+        )
+ 
+
