@@ -325,6 +325,367 @@ def cek_kapasitas(hasil_interaksi, Pu, Mu):
 
 
 # ============================================================
+# BAGIAN 3: GENERATOR LAPORAN
+# ============================================================
+
+@st.cache_data
+def buat_word(R, nama_eng, nama_prj, tgl_lpr, Mu_desain):
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    props        = R["props"]
+    kekakuan     = R["kekakuan"]
+    kelangsingan = R["kelangsingan"]
+    pembesaran   = R["pembesaran"]
+    layers       = R["layers"]
+    hasil_interaksi = R["hasil_interaksi"]
+    cek          = R["cek"]
+    inp          = R["inp"]
+    is_slender   = R["is_slender"]
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width    = Cm(21);  sec.page_height  = Cm(29.7)
+    sec.left_margin   = Cm(2.5); sec.right_margin = Cm(2)
+    sec.top_margin    = Cm(2.5); sec.bottom_margin= Cm(2)
+
+    def heading(txt, lvl=1):
+        p = doc.add_heading(txt, level=lvl)
+        clr = RGBColor(0, 70, 127)
+        for run in p.runs:
+            run.font.color.rgb = clr; run.bold = True
+
+    def tbl(headers, rows, col_widths=None):
+        t = doc.add_table(rows=1, cols=len(headers))
+        t.style = "Table Grid"
+        for i, h in enumerate(headers):
+            c = t.rows[0].cells[i]
+            c.text = h
+            for p in c.paragraphs:
+                for r in p.runs: r.bold = True; r.font.size = Pt(9)
+        for row in rows:
+            rc = t.add_row().cells
+            for i, val in enumerate(row):
+                rc[i].text = str(val)
+                for p in rc[i].paragraphs:
+                    for r in p.runs: r.font.size = Pt(9)
+        return t
+
+    def code_para(txt):
+        p = doc.add_paragraph()
+        r = p.add_run(txt); r.font.name = "Courier New"; r.font.size = Pt(8.5)
+
+    # -- Cover --
+    doc.add_paragraph()
+    pt = doc.add_paragraph(); pt.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    rt = pt.add_run("LAPORAN PERHITUNGAN STRUKTUR")
+    rt.bold = True; rt.font.size = Pt(18); rt.font.color.rgb = RGBColor(0,70,127)
+    p2 = doc.add_paragraph(); p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p2.add_run("KAPASITAS KOLOM BETON BERTULANG — DIAGRAM INTERAKSI P-M").bold = True
+    p3 = doc.add_paragraph(); p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p3.add_run("SNI 2847:2019")
+    doc.add_paragraph()
+    for k, v in [("Proyek", nama_prj), ("Engineer", nama_eng), ("Tanggal", tgl_lpr), ("Standar", "SNI 2847:2019")]:
+        pi = doc.add_paragraph(); pi.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pi.add_run(f"{k}: ").bold = True; pi.add_run(v)
+    doc.add_page_break()
+
+    # -- BAB 1 --
+    heading("BAB 1: DATA INPUT PARAMETER", 1)
+    heading("1.1 Material", 2)
+    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
+        ["Mutu Beton",  "fc'", str(inp["fc"]), "MPa"],
+        ["Mutu Baja",   "fy",  str(inp["fy"]), "MPa"],
+        ["Mod. Elastisitas Baja", "Es", str(inp["Es"]), "MPa"],
+    ])
+    doc.add_paragraph()
+    heading("1.2 Dimensi & Tulangan", 2)
+    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
+        ["Lebar Kolom",          "b",  str(inp["b"]),     "mm"],
+        ["Tinggi Kolom",         "h",  str(inp["h"]),     "mm"],
+        ["Selimut Beton",        "c",  str(inp["c_sel"]), "mm"],
+        ["Dia. Sengkang",        "Os", str(inp["dia_s"]), "mm"],
+        ["Dia. Tulangan",        "D",  str(inp["D"]),     "mm"],
+        ["Tul. Sisi b",          "n_b",str(inp["n_b"]),   "bh"],
+        ["Tul. Sisi h",          "n_h",str(inp["n_h"]),   "bh"],
+        ["Total Tulangan",       "nt", str(props["n_total"]), "bh"],
+        ["Panjang Tak Tertahan", "Lu", str(inp["Lu"]),    "mm"],
+    ])
+    doc.add_paragraph()
+    heading("1.3 Beban Terfaktor", 2)
+    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
+        ["Gaya Aksial",   "Pu", str(inp["Pu"]), "kN"],
+        ["Momen Ujung 1", "M1", str(inp["M1"]), "kN.m"],
+        ["Momen Ujung 2", "M2", str(inp["M2"]), "kN.m"],
+        ["Momen Desain",  "Mc", f"{Mu_desain:.4f}", "kN.m"],
+    ])
+    doc.add_page_break()
+
+    # -- BAB 2 --
+    heading("BAB 2: PROSES PERHITUNGAN STEP-BY-STEP", 1)
+    heading("2.1 Properti Penampang", 2)
+    code_para(
+        f"Ag  = {inp['b']:.0f} x {inp['h']:.0f} = {props['Ag']:,.2f} mm2\n"
+        f"Ig  = (1/12)x{inp['b']:.0f}x{inp['h']:.0f}3 = {props['Ig']:,.2f} mm4\n"
+        f"Ec  = 4700 x sqrt({inp['fc']:.0f}) = {props['Ec']:,.2f} MPa\n"
+        f"d'  = {inp['c_sel']:.0f}+{inp['dia_s']:.0f}+{inp['D']:.0f}/2 = {props['d_prime']:.2f} mm\n"
+        f"d   = {inp['h']:.0f}-{props['d_prime']:.2f} = {props['d']:.2f} mm\n"
+        f"nt  = 2x{inp['n_b']}+2x({inp['n_h']}-2) = {props['n_total']} bh\n"
+        f"Ast = {props['n_total']}xpix{inp['D']:.0f}2/4 = {props['Ast']:,.2f} mm2\n"
+        f"rho = {props['rho_g']:.2f}%  -> {props['cek_rasio']}"
+    )
+    heading("2.2 Kekakuan & Psi", 2)
+    code_para(
+        f"EI/L Bal.Atas Kiri  = {kekakuan['bal_atas_kiri']:,.2f} N.mm\n"
+        f"EI/L Bal.Atas Kanan = {kekakuan['bal_atas_kanan']:,.2f} N.mm\n"
+        f"EI/L Kol.Atas       = {kekakuan['kol_atas']:,.2f} N.mm\n"
+        f"EI/L Kol.Ditinjau   = {kekakuan['kol_ditinjau']:,.2f} N.mm\n"
+        f"PSI_A = {kekakuan['psi_A']:.4f}\n"
+        f"PSI_B = {kekakuan['psi_B']:.4f}\n"
+        f"k({inp['kondisi_rangka']}) = {kelangsingan['k']:.6f}\n"
+        f"r = 0.3x{inp['h']:.0f} = {kelangsingan['r']:.2f} mm\n"
+        f"kLu/r = {kelangsingan['rasio']:.2f}  Batas={kelangsingan['batas']:.2f}  -> {kelangsingan['klasifikasi']}"
+    )
+    if is_slender and inp["kondisi_rangka"] == "Braced":
+        heading("2.3 Pembesaran Momen", 2)
+        code_para(
+            f"(EI)eff = 0.4xEcxIg/(1+beta) = {pembesaran['EI_eff']:,.2f} N.mm2\n"
+            f"Pc      = pi2x(EI)eff/(kxLu)2 = {pembesaran['Pc']:,.2f} kN\n"
+            f"Cm      = 0.6+0.4x({inp['M1']}/{inp['M2']}) = {pembesaran['Cm']:.4f}\n"
+            f"delta   = {pembesaran['delta_ns']:.4f}\n"
+            f"Mc      = {pembesaran['delta_ns']:.4f} x {inp['M2']:.0f} = {pembesaran['Mc']:.4f} kN.m"
+        )
+    heading("2.4 Tabel Diagram Interaksi (52 Titik)", 2)
+    rows_int = []
+    for row in hasil_interaksi:
+        def sv(k, d=2):
+            try: return f"{float(row[k]):,.{d}f}"
+            except: return str(row.get(k, "-"))
+        rows_int.append([str(row["No"]), str(row["c/h"]),
+                         sv("Pn"), sv("Mn"), str(row["phi"]),
+                         sv("phi_Pn"), sv("phi_Mn")])
+    tbl(["No","c/h","Pn(kN)","Mn(kN.m)","phi","phiPn(kN)","phiMn(kN.m)"], rows_int)
+    doc.add_page_break()
+
+    # -- BAB 3 --
+    heading("BAB 3: KESIMPULAN & HASIL AKHIR", 1)
+    def fv(v):
+        return f"{v:.2f}" if v is not None else "-"
+    tbl(["Parameter","Nilai","Satuan","Status"], [
+        ["Klasifikasi Kolom",   kelangsingan["klasifikasi"],     "-",    "-"],
+        ["Pu",                  f"{inp['Pu']:.2f}",              "kN",   "INPUT"],
+        ["Momen Desain Mc",     f"{Mu_desain:.4f}",              "kN.m", "INPUT"],
+        ["phi.Pn Kapasitas",    fv(cek["phi_Pn_kapasitas"]),     "kN",   "-"],
+        ["phi.Mn Kapasitas",    fv(cek["phi_Mn_kapasitas"]),     "kN.m", "-"],
+        ["Rasio Pu/phi.Pn",     fv(cek["ratio_Pu"]),             "-",    "OK" if (cek["ratio_Pu"] or 0)<=1 else "NOT OK"],
+        ["Rasio Mu/phi.Mn",     fv(cek["ratio_Mu"]),             "-",    "OK" if (cek["ratio_Mu"] or 0)<=1 else "NOT OK"],
+        ["STATUS AKHIR",        cek["status"],                   "-",    cek["status"]],
+    ])
+    doc.add_paragraph()
+    doc.add_paragraph(
+        f"Perhitungan sesuai SNI 2847:2019. Diagram 52 titik. "
+        f"Dibuat: {nama_eng} | {tgl_lpr}"
+    )
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@st.cache_data
+def buat_pdf(R, nama_eng, nama_prj, tgl_lpr, Mu_desain):
+    from fpdf import FPDF
+
+    props        = R["props"]
+    kekakuan     = R["kekakuan"]
+    kelangsingan = R["kelangsingan"]
+    pembesaran   = R["pembesaran"]
+    hasil_interaksi = R["hasil_interaksi"]
+    cek          = R["cek"]
+    inp          = R["inp"]
+    is_slender   = R["is_slender"]
+
+    def sc(text):
+        """Sanitasi ke latin-1."""
+        subs = {
+            "φ":"phi","Φ":"Phi","²":"2","³":"3","√":"sqrt","·":".",
+            "Ø":"O","ε":"eps","β":"beta","δ":"delta","ρ":"rho",
+            "Ψ":"Psi","ψ":"psi","≤":"<=","≥":">=","×":"x","π":"pi",
+            "∞":"inf","–":"-","—":"-","'":"'","'":"'",
+        }
+        for k, v in subs.items():
+            text = text.replace(k, v)
+        return text.encode("latin-1", errors="replace").decode("latin-1")
+
+    class PDF(FPDF):
+        def header(self):
+            self.set_font("Helvetica","B",8)
+            self.set_text_color(0,70,127)
+            self.cell(0,7,sc("LAPORAN KAPASITAS KOLOM BETON BERTULANG | SNI 2847:2019"),align="C")
+            self.ln(3)
+            self.set_draw_color(0,70,127)
+            self.line(10,self.get_y(),200,self.get_y())
+            self.ln(2)
+            self.set_text_color(0,0,0)
+
+        def footer(self):
+            self.set_y(-13)
+            self.set_font("Helvetica","I",7)
+            self.set_text_color(120,120,120)
+            self.cell(0,8,sc(f"{nama_eng} | {tgl_lpr} | Hal. {self.page_no()}"),align="C")
+            self.set_text_color(0,0,0)
+
+        def sec(self, txt, lvl=1):
+            if lvl==1:
+                self.set_font("Helvetica","B",11)
+                self.set_fill_color(0,70,127)
+                self.set_text_color(255,255,255)
+                self.cell(0,7,sc(txt),fill=True,ln=True)
+                self.set_text_color(0,0,0)
+            else:
+                self.set_font("Helvetica","B",9)
+                self.set_text_color(0,70,127)
+                self.cell(0,6,sc(txt),ln=True)
+                self.set_text_color(0,0,0)
+            self.ln(1)
+
+        def th(self, cols, ws):
+            self.set_font("Helvetica","B",8)
+            self.set_fill_color(210,225,245)
+            for col,w in zip(cols,ws):
+                self.cell(w,6,sc(col),border=1,fill=True)
+            self.ln()
+
+        def tr(self, vals, ws):
+            self.set_font("Helvetica","",7.5)
+            for val,w in zip(vals,ws):
+                self.cell(w,5.5,sc(str(val)),border=1)
+            self.ln()
+
+        def code(self, txt):
+            self.set_font("Courier","",8)
+            for line in txt.split("\n"):
+                self.cell(0,5,sc(line),ln=True)
+            self.ln(1)
+
+    pdf = PDF()
+    pdf.set_auto_page_break(True,15)
+    pdf.set_margins(12,15,12)
+
+    # Cover
+    pdf.add_page()
+    pdf.ln(20)
+    pdf.set_font("Helvetica","B",18)
+    pdf.set_text_color(0,70,127)
+    pdf.cell(0,12,"LAPORAN PERHITUNGAN STRUKTUR",align="C",ln=True)
+    pdf.set_font("Helvetica","B",13)
+    pdf.cell(0,9,"KAPASITAS KOLOM BETON BERTULANG",align="C",ln=True)
+    pdf.set_font("Helvetica","",10)
+    pdf.cell(0,7,"Diagram Interaksi P-M | SNI 2847:2019",align="C",ln=True)
+    pdf.set_text_color(0,0,0)
+    pdf.ln(12)
+    for k,v in [("Proyek",nama_prj),("Engineer",nama_eng),("Tanggal",tgl_lpr),("Standar","SNI 2847:2019")]:
+        pdf.set_font("Helvetica","B",10); pdf.cell(45,7,sc(k+" :"),align="R")
+        pdf.set_font("Helvetica","",10);  pdf.cell(0,7,sc(v),ln=True)
+
+    # BAB 1
+    pdf.add_page()
+    pdf.sec("BAB 1: DATA INPUT PARAMETER")
+    pdf.sec("1.1 Material",2)
+    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
+    for r in [["Mutu Beton","fc'",str(inp["fc"]),"MPa"],
+               ["Mutu Baja","fy",str(inp["fy"]),"MPa"],
+               ["Mod.Elastisitas Baja","Es",str(inp["Es"]),"MPa"]]:
+        pdf.tr(r,[70,25,35,56])
+    pdf.ln(3)
+    pdf.sec("1.2 Dimensi & Tulangan",2)
+    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
+    for r in [["Lebar","b",str(inp["b"]),"mm"],["Tinggi","h",str(inp["h"]),"mm"],
+               ["Selimut","c",str(inp["c_sel"]),"mm"],["Dia.Sengkang","Os",str(inp["dia_s"]),"mm"],
+               ["Dia.Tulangan","D",str(inp["D"]),"mm"],["Tul.Sisi b","n_b",str(inp["n_b"]),"bh"],
+               ["Tul.Sisi h","n_h",str(inp["n_h"]),"bh"],["Total Tul","nt",str(props["n_total"]),"bh"],
+               ["Panjang Lu","Lu",str(inp["Lu"]),"mm"]]:
+        pdf.tr(r,[70,25,35,56])
+    pdf.ln(3)
+    pdf.sec("1.3 Beban Terfaktor",2)
+    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
+    for r in [["Gaya Aksial","Pu",str(inp["Pu"]),"kN"],["Momen M1","M1",str(inp["M1"]),"kN.m"],
+               ["Momen M2","M2",str(inp["M2"]),"kN.m"],["Momen Desain","Mc",f"{Mu_desain:.4f}","kN.m"]]:
+        pdf.tr(r,[70,25,35,56])
+
+    # BAB 2
+    pdf.add_page()
+    pdf.sec("BAB 2: PROSES PERHITUNGAN STEP-BY-STEP")
+    pdf.sec("2.1 Properti Penampang",2)
+    pdf.code(
+        f"Ag  = {inp['b']:.0f} x {inp['h']:.0f} = {props['Ag']:,.2f} mm2\n"
+        f"Ig  = (1/12)x{inp['b']:.0f}x{inp['h']:.0f}3 = {props['Ig']:,.2f} mm4\n"
+        f"Ec  = 4700 x sqrt({inp['fc']:.0f}) = {props['Ec']:,.2f} MPa\n"
+        f"d'  = {props['d_prime']:.2f} mm  |  d = {props['d']:.2f} mm\n"
+        f"Ast = {props['Ast']:,.2f} mm2  |  rho = {props['rho_g']:.2f}%  -> {props['cek_rasio']}"
+    )
+    pdf.sec("2.2 Kekakuan & Psi",2)
+    pdf.code(
+        f"PSI_A = {kekakuan['psi_A']:.4f}  |  PSI_B = {kekakuan['psi_B']:.4f}\n"
+        f"k({inp['kondisi_rangka']}) = {kelangsingan['k']:.6f}\n"
+        f"kLu/r = {kelangsingan['rasio']:.2f}  Batas={kelangsingan['batas']:.2f}  -> {kelangsingan['klasifikasi']}"
+    )
+    if is_slender and inp["kondisi_rangka"]=="Braced":
+        pdf.sec("2.3 Pembesaran Momen",2)
+        pdf.code(
+            f"(EI)eff = {pembesaran['EI_eff']:,.2f} N.mm2\n"
+            f"Pc      = {pembesaran['Pc']:,.2f} kN\n"
+            f"Cm      = {pembesaran['Cm']:.4f}  |  delta = {pembesaran['delta_ns']:.4f}\n"
+            f"Mc      = {pembesaran['Mc']:.4f} kN.m"
+        )
+    pdf.sec("2.4 Tabel Diagram Interaksi (52 Titik)",2)
+    ws2=[10,18,24,24,12,24,24]
+    pdf.th(["No","c/h","Pn(kN)","Mn(kN.m)","phi","phiPn(kN)","phiMn(kN.m)"],ws2)
+    for row in hasil_interaksi:
+        def sv(k,d=2):
+            try: return f"{float(row[k]):,.{d}f}"
+            except: return str(row.get(k,"-"))
+        pdf.tr([str(row["No"]),str(row["c/h"]),sv("Pn"),sv("Mn"),str(row["phi"]),sv("phi_Pn"),sv("phi_Mn")],ws2)
+
+    # BAB 3
+    pdf.add_page()
+    pdf.sec("BAB 3: KESIMPULAN & HASIL AKHIR")
+    def fv(v):
+        return f"{v:.2f}" if v is not None else "-"
+    ws3=[75,35,20,56]
+    pdf.th(["Parameter","Nilai","Satuan","Status"],ws3)
+    for r in [
+        ["Klasifikasi",       kelangsingan["klasifikasi"], "-", "-"],
+        ["Pu",                f"{inp['Pu']:.2f}",          "kN","INPUT"],
+        ["Momen Desain Mc",   f"{Mu_desain:.4f}",          "kN.m","INPUT"],
+        ["phi.Pn Kapasitas",  fv(cek["phi_Pn_kapasitas"]), "kN", "-"],
+        ["phi.Mn Kapasitas",  fv(cek["phi_Mn_kapasitas"]), "kN.m","-"],
+        ["Rasio Pu/phi.Pn",   fv(cek["ratio_Pu"]),         "-",   "OK" if (cek["ratio_Pu"] or 0)<=1 else "NOT OK"],
+        ["Rasio Mu/phi.Mn",   fv(cek["ratio_Mu"]),         "-",   "OK" if (cek["ratio_Mu"] or 0)<=1 else "NOT OK"],
+        ["STATUS AKHIR",      cek["status"],                "-",   cek["status"]],
+    ]:
+        pdf.tr(r, ws3)
+    pdf.ln(5)
+    pdf.set_font("Helvetica","",8.5)
+    pdf.multi_cell(0,5,sc(
+        f"Catatan: Perhitungan berdasarkan SNI 2847:2019. Diagram 52 titik. "
+        f"Dibuat: {nama_eng} | {tgl_lpr}"
+    ))
+
+    return bytes(pdf.output())
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+st.divider()
+st.markdown(
+    "<div style='text-align:center;color:gray;font-size:11px;'>"
+    "🏛️ Kolom Beton Bertulang | SNI 2847:2019 | Ladosi</div>",
+    unsafe_allow_html=True,
+)
 # BAGIAN 2: UI STREAMLIT
 # ============================================================
 
@@ -900,364 +1261,3 @@ with tab5:
 
 
 # ============================================================
-# BAGIAN 3: GENERATOR LAPORAN
-# ============================================================
-
-@st.cache_data
-def buat_word(R, nama_eng, nama_prj, tgl_lpr, Mu_desain):
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-    props        = R["props"]
-    kekakuan     = R["kekakuan"]
-    kelangsingan = R["kelangsingan"]
-    pembesaran   = R["pembesaran"]
-    layers       = R["layers"]
-    hasil_interaksi = R["hasil_interaksi"]
-    cek          = R["cek"]
-    inp          = R["inp"]
-    is_slender   = R["is_slender"]
-
-    doc = Document()
-    sec = doc.sections[0]
-    sec.page_width    = Cm(21);  sec.page_height  = Cm(29.7)
-    sec.left_margin   = Cm(2.5); sec.right_margin = Cm(2)
-    sec.top_margin    = Cm(2.5); sec.bottom_margin= Cm(2)
-
-    def heading(txt, lvl=1):
-        p = doc.add_heading(txt, level=lvl)
-        clr = RGBColor(0, 70, 127)
-        for run in p.runs:
-            run.font.color.rgb = clr; run.bold = True
-
-    def tbl(headers, rows, col_widths=None):
-        t = doc.add_table(rows=1, cols=len(headers))
-        t.style = "Table Grid"
-        for i, h in enumerate(headers):
-            c = t.rows[0].cells[i]
-            c.text = h
-            for p in c.paragraphs:
-                for r in p.runs: r.bold = True; r.font.size = Pt(9)
-        for row in rows:
-            rc = t.add_row().cells
-            for i, val in enumerate(row):
-                rc[i].text = str(val)
-                for p in rc[i].paragraphs:
-                    for r in p.runs: r.font.size = Pt(9)
-        return t
-
-    def code_para(txt):
-        p = doc.add_paragraph()
-        r = p.add_run(txt); r.font.name = "Courier New"; r.font.size = Pt(8.5)
-
-    # -- Cover --
-    doc.add_paragraph()
-    pt = doc.add_paragraph(); pt.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    rt = pt.add_run("LAPORAN PERHITUNGAN STRUKTUR")
-    rt.bold = True; rt.font.size = Pt(18); rt.font.color.rgb = RGBColor(0,70,127)
-    p2 = doc.add_paragraph(); p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.add_run("KAPASITAS KOLOM BETON BERTULANG — DIAGRAM INTERAKSI P-M").bold = True
-    p3 = doc.add_paragraph(); p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p3.add_run("SNI 2847:2019")
-    doc.add_paragraph()
-    for k, v in [("Proyek", nama_prj), ("Engineer", nama_eng), ("Tanggal", tgl_lpr), ("Standar", "SNI 2847:2019")]:
-        pi = doc.add_paragraph(); pi.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        pi.add_run(f"{k}: ").bold = True; pi.add_run(v)
-    doc.add_page_break()
-
-    # -- BAB 1 --
-    heading("BAB 1: DATA INPUT PARAMETER", 1)
-    heading("1.1 Material", 2)
-    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
-        ["Mutu Beton",  "fc'", str(inp["fc"]), "MPa"],
-        ["Mutu Baja",   "fy",  str(inp["fy"]), "MPa"],
-        ["Mod. Elastisitas Baja", "Es", str(inp["Es"]), "MPa"],
-    ])
-    doc.add_paragraph()
-    heading("1.2 Dimensi & Tulangan", 2)
-    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
-        ["Lebar Kolom",          "b",  str(inp["b"]),     "mm"],
-        ["Tinggi Kolom",         "h",  str(inp["h"]),     "mm"],
-        ["Selimut Beton",        "c",  str(inp["c_sel"]), "mm"],
-        ["Dia. Sengkang",        "Os", str(inp["dia_s"]), "mm"],
-        ["Dia. Tulangan",        "D",  str(inp["D"]),     "mm"],
-        ["Tul. Sisi b",          "n_b",str(inp["n_b"]),   "bh"],
-        ["Tul. Sisi h",          "n_h",str(inp["n_h"]),   "bh"],
-        ["Total Tulangan",       "nt", str(props["n_total"]), "bh"],
-        ["Panjang Tak Tertahan", "Lu", str(inp["Lu"]),    "mm"],
-    ])
-    doc.add_paragraph()
-    heading("1.3 Beban Terfaktor", 2)
-    tbl(["Parameter", "Simbol", "Nilai", "Satuan"], [
-        ["Gaya Aksial",   "Pu", str(inp["Pu"]), "kN"],
-        ["Momen Ujung 1", "M1", str(inp["M1"]), "kN.m"],
-        ["Momen Ujung 2", "M2", str(inp["M2"]), "kN.m"],
-        ["Momen Desain",  "Mc", f"{Mu_desain:.4f}", "kN.m"],
-    ])
-    doc.add_page_break()
-
-    # -- BAB 2 --
-    heading("BAB 2: PROSES PERHITUNGAN STEP-BY-STEP", 1)
-    heading("2.1 Properti Penampang", 2)
-    code_para(
-        f"Ag  = {inp['b']:.0f} x {inp['h']:.0f} = {props['Ag']:,.2f} mm2\n"
-        f"Ig  = (1/12)x{inp['b']:.0f}x{inp['h']:.0f}3 = {props['Ig']:,.2f} mm4\n"
-        f"Ec  = 4700 x sqrt({inp['fc']:.0f}) = {props['Ec']:,.2f} MPa\n"
-        f"d'  = {inp['c_sel']:.0f}+{inp['dia_s']:.0f}+{inp['D']:.0f}/2 = {props['d_prime']:.2f} mm\n"
-        f"d   = {inp['h']:.0f}-{props['d_prime']:.2f} = {props['d']:.2f} mm\n"
-        f"nt  = 2x{inp['n_b']}+2x({inp['n_h']}-2) = {props['n_total']} bh\n"
-        f"Ast = {props['n_total']}xpix{inp['D']:.0f}2/4 = {props['Ast']:,.2f} mm2\n"
-        f"rho = {props['rho_g']:.2f}%  -> {props['cek_rasio']}"
-    )
-    heading("2.2 Kekakuan & Psi", 2)
-    code_para(
-        f"EI/L Bal.Atas Kiri  = {kekakuan['bal_atas_kiri']:,.2f} N.mm\n"
-        f"EI/L Bal.Atas Kanan = {kekakuan['bal_atas_kanan']:,.2f} N.mm\n"
-        f"EI/L Kol.Atas       = {kekakuan['kol_atas']:,.2f} N.mm\n"
-        f"EI/L Kol.Ditinjau   = {kekakuan['kol_ditinjau']:,.2f} N.mm\n"
-        f"PSI_A = {kekakuan['psi_A']:.4f}\n"
-        f"PSI_B = {kekakuan['psi_B']:.4f}\n"
-        f"k({inp['kondisi_rangka']}) = {kelangsingan['k']:.6f}\n"
-        f"r = 0.3x{inp['h']:.0f} = {kelangsingan['r']:.2f} mm\n"
-        f"kLu/r = {kelangsingan['rasio']:.2f}  Batas={kelangsingan['batas']:.2f}  -> {kelangsingan['klasifikasi']}"
-    )
-    if is_slender and inp["kondisi_rangka"] == "Braced":
-        heading("2.3 Pembesaran Momen", 2)
-        code_para(
-            f"(EI)eff = 0.4xEcxIg/(1+beta) = {pembesaran['EI_eff']:,.2f} N.mm2\n"
-            f"Pc      = pi2x(EI)eff/(kxLu)2 = {pembesaran['Pc']:,.2f} kN\n"
-            f"Cm      = 0.6+0.4x({inp['M1']}/{inp['M2']}) = {pembesaran['Cm']:.4f}\n"
-            f"delta   = {pembesaran['delta_ns']:.4f}\n"
-            f"Mc      = {pembesaran['delta_ns']:.4f} x {inp['M2']:.0f} = {pembesaran['Mc']:.4f} kN.m"
-        )
-    heading("2.4 Tabel Diagram Interaksi (52 Titik)", 2)
-    rows_int = []
-    for row in hasil_interaksi:
-        def sv(k, d=2):
-            try: return f"{float(row[k]):,.{d}f}"
-            except: return str(row.get(k, "-"))
-        rows_int.append([str(row["No"]), str(row["c/h"]),
-                         sv("Pn"), sv("Mn"), str(row["phi"]),
-                         sv("phi_Pn"), sv("phi_Mn")])
-    tbl(["No","c/h","Pn(kN)","Mn(kN.m)","phi","phiPn(kN)","phiMn(kN.m)"], rows_int)
-    doc.add_page_break()
-
-    # -- BAB 3 --
-    heading("BAB 3: KESIMPULAN & HASIL AKHIR", 1)
-    def fv(v):
-        return f"{v:.2f}" if v is not None else "-"
-    tbl(["Parameter","Nilai","Satuan","Status"], [
-        ["Klasifikasi Kolom",   kelangsingan["klasifikasi"],     "-",    "-"],
-        ["Pu",                  f"{inp['Pu']:.2f}",              "kN",   "INPUT"],
-        ["Momen Desain Mc",     f"{Mu_desain:.4f}",              "kN.m", "INPUT"],
-        ["phi.Pn Kapasitas",    fv(cek["phi_Pn_kapasitas"]),     "kN",   "-"],
-        ["phi.Mn Kapasitas",    fv(cek["phi_Mn_kapasitas"]),     "kN.m", "-"],
-        ["Rasio Pu/phi.Pn",     fv(cek["ratio_Pu"]),             "-",    "OK" if (cek["ratio_Pu"] or 0)<=1 else "NOT OK"],
-        ["Rasio Mu/phi.Mn",     fv(cek["ratio_Mu"]),             "-",    "OK" if (cek["ratio_Mu"] or 0)<=1 else "NOT OK"],
-        ["STATUS AKHIR",        cek["status"],                   "-",    cek["status"]],
-    ])
-    doc.add_paragraph()
-    doc.add_paragraph(
-        f"Perhitungan sesuai SNI 2847:2019. Diagram 52 titik. "
-        f"Dibuat: {nama_eng} | {tgl_lpr}"
-    )
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-@st.cache_data
-def buat_pdf(R, nama_eng, nama_prj, tgl_lpr, Mu_desain):
-    from fpdf import FPDF
-
-    props        = R["props"]
-    kekakuan     = R["kekakuan"]
-    kelangsingan = R["kelangsingan"]
-    pembesaran   = R["pembesaran"]
-    hasil_interaksi = R["hasil_interaksi"]
-    cek          = R["cek"]
-    inp          = R["inp"]
-    is_slender   = R["is_slender"]
-
-    def sc(text):
-        """Sanitasi ke latin-1."""
-        subs = {
-            "φ":"phi","Φ":"Phi","²":"2","³":"3","√":"sqrt","·":".",
-            "Ø":"O","ε":"eps","β":"beta","δ":"delta","ρ":"rho",
-            "Ψ":"Psi","ψ":"psi","≤":"<=","≥":">=","×":"x","π":"pi",
-            "∞":"inf","–":"-","—":"-","'":"'","'":"'",
-        }
-        for k, v in subs.items():
-            text = text.replace(k, v)
-        return text.encode("latin-1", errors="replace").decode("latin-1")
-
-    class PDF(FPDF):
-        def header(self):
-            self.set_font("Helvetica","B",8)
-            self.set_text_color(0,70,127)
-            self.cell(0,7,sc("LAPORAN KAPASITAS KOLOM BETON BERTULANG | SNI 2847:2019"),align="C")
-            self.ln(3)
-            self.set_draw_color(0,70,127)
-            self.line(10,self.get_y(),200,self.get_y())
-            self.ln(2)
-            self.set_text_color(0,0,0)
-
-        def footer(self):
-            self.set_y(-13)
-            self.set_font("Helvetica","I",7)
-            self.set_text_color(120,120,120)
-            self.cell(0,8,sc(f"{nama_eng} | {tgl_lpr} | Hal. {self.page_no()}"),align="C")
-            self.set_text_color(0,0,0)
-
-        def sec(self, txt, lvl=1):
-            if lvl==1:
-                self.set_font("Helvetica","B",11)
-                self.set_fill_color(0,70,127)
-                self.set_text_color(255,255,255)
-                self.cell(0,7,sc(txt),fill=True,ln=True)
-                self.set_text_color(0,0,0)
-            else:
-                self.set_font("Helvetica","B",9)
-                self.set_text_color(0,70,127)
-                self.cell(0,6,sc(txt),ln=True)
-                self.set_text_color(0,0,0)
-            self.ln(1)
-
-        def th(self, cols, ws):
-            self.set_font("Helvetica","B",8)
-            self.set_fill_color(210,225,245)
-            for col,w in zip(cols,ws):
-                self.cell(w,6,sc(col),border=1,fill=True)
-            self.ln()
-
-        def tr(self, vals, ws):
-            self.set_font("Helvetica","",7.5)
-            for val,w in zip(vals,ws):
-                self.cell(w,5.5,sc(str(val)),border=1)
-            self.ln()
-
-        def code(self, txt):
-            self.set_font("Courier","",8)
-            for line in txt.split("\n"):
-                self.cell(0,5,sc(line),ln=True)
-            self.ln(1)
-
-    pdf = PDF()
-    pdf.set_auto_page_break(True,15)
-    pdf.set_margins(12,15,12)
-
-    # Cover
-    pdf.add_page()
-    pdf.ln(20)
-    pdf.set_font("Helvetica","B",18)
-    pdf.set_text_color(0,70,127)
-    pdf.cell(0,12,"LAPORAN PERHITUNGAN STRUKTUR",align="C",ln=True)
-    pdf.set_font("Helvetica","B",13)
-    pdf.cell(0,9,"KAPASITAS KOLOM BETON BERTULANG",align="C",ln=True)
-    pdf.set_font("Helvetica","",10)
-    pdf.cell(0,7,"Diagram Interaksi P-M | SNI 2847:2019",align="C",ln=True)
-    pdf.set_text_color(0,0,0)
-    pdf.ln(12)
-    for k,v in [("Proyek",nama_prj),("Engineer",nama_eng),("Tanggal",tgl_lpr),("Standar","SNI 2847:2019")]:
-        pdf.set_font("Helvetica","B",10); pdf.cell(45,7,sc(k+" :"),align="R")
-        pdf.set_font("Helvetica","",10);  pdf.cell(0,7,sc(v),ln=True)
-
-    # BAB 1
-    pdf.add_page()
-    pdf.sec("BAB 1: DATA INPUT PARAMETER")
-    pdf.sec("1.1 Material",2)
-    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
-    for r in [["Mutu Beton","fc'",str(inp["fc"]),"MPa"],
-               ["Mutu Baja","fy",str(inp["fy"]),"MPa"],
-               ["Mod.Elastisitas Baja","Es",str(inp["Es"]),"MPa"]]:
-        pdf.tr(r,[70,25,35,56])
-    pdf.ln(3)
-    pdf.sec("1.2 Dimensi & Tulangan",2)
-    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
-    for r in [["Lebar","b",str(inp["b"]),"mm"],["Tinggi","h",str(inp["h"]),"mm"],
-               ["Selimut","c",str(inp["c_sel"]),"mm"],["Dia.Sengkang","Os",str(inp["dia_s"]),"mm"],
-               ["Dia.Tulangan","D",str(inp["D"]),"mm"],["Tul.Sisi b","n_b",str(inp["n_b"]),"bh"],
-               ["Tul.Sisi h","n_h",str(inp["n_h"]),"bh"],["Total Tul","nt",str(props["n_total"]),"bh"],
-               ["Panjang Lu","Lu",str(inp["Lu"]),"mm"]]:
-        pdf.tr(r,[70,25,35,56])
-    pdf.ln(3)
-    pdf.sec("1.3 Beban Terfaktor",2)
-    pdf.th(["Parameter","Simbol","Nilai","Satuan"],[70,25,35,56])
-    for r in [["Gaya Aksial","Pu",str(inp["Pu"]),"kN"],["Momen M1","M1",str(inp["M1"]),"kN.m"],
-               ["Momen M2","M2",str(inp["M2"]),"kN.m"],["Momen Desain","Mc",f"{Mu_desain:.4f}","kN.m"]]:
-        pdf.tr(r,[70,25,35,56])
-
-    # BAB 2
-    pdf.add_page()
-    pdf.sec("BAB 2: PROSES PERHITUNGAN STEP-BY-STEP")
-    pdf.sec("2.1 Properti Penampang",2)
-    pdf.code(
-        f"Ag  = {inp['b']:.0f} x {inp['h']:.0f} = {props['Ag']:,.2f} mm2\n"
-        f"Ig  = (1/12)x{inp['b']:.0f}x{inp['h']:.0f}3 = {props['Ig']:,.2f} mm4\n"
-        f"Ec  = 4700 x sqrt({inp['fc']:.0f}) = {props['Ec']:,.2f} MPa\n"
-        f"d'  = {props['d_prime']:.2f} mm  |  d = {props['d']:.2f} mm\n"
-        f"Ast = {props['Ast']:,.2f} mm2  |  rho = {props['rho_g']:.2f}%  -> {props['cek_rasio']}"
-    )
-    pdf.sec("2.2 Kekakuan & Psi",2)
-    pdf.code(
-        f"PSI_A = {kekakuan['psi_A']:.4f}  |  PSI_B = {kekakuan['psi_B']:.4f}\n"
-        f"k({inp['kondisi_rangka']}) = {kelangsingan['k']:.6f}\n"
-        f"kLu/r = {kelangsingan['rasio']:.2f}  Batas={kelangsingan['batas']:.2f}  -> {kelangsingan['klasifikasi']}"
-    )
-    if is_slender and inp["kondisi_rangka"]=="Braced":
-        pdf.sec("2.3 Pembesaran Momen",2)
-        pdf.code(
-            f"(EI)eff = {pembesaran['EI_eff']:,.2f} N.mm2\n"
-            f"Pc      = {pembesaran['Pc']:,.2f} kN\n"
-            f"Cm      = {pembesaran['Cm']:.4f}  |  delta = {pembesaran['delta_ns']:.4f}\n"
-            f"Mc      = {pembesaran['Mc']:.4f} kN.m"
-        )
-    pdf.sec("2.4 Tabel Diagram Interaksi (52 Titik)",2)
-    ws2=[10,18,24,24,12,24,24]
-    pdf.th(["No","c/h","Pn(kN)","Mn(kN.m)","phi","phiPn(kN)","phiMn(kN.m)"],ws2)
-    for row in hasil_interaksi:
-        def sv(k,d=2):
-            try: return f"{float(row[k]):,.{d}f}"
-            except: return str(row.get(k,"-"))
-        pdf.tr([str(row["No"]),str(row["c/h"]),sv("Pn"),sv("Mn"),str(row["phi"]),sv("phi_Pn"),sv("phi_Mn")],ws2)
-
-    # BAB 3
-    pdf.add_page()
-    pdf.sec("BAB 3: KESIMPULAN & HASIL AKHIR")
-    def fv(v):
-        return f"{v:.2f}" if v is not None else "-"
-    ws3=[75,35,20,56]
-    pdf.th(["Parameter","Nilai","Satuan","Status"],ws3)
-    for r in [
-        ["Klasifikasi",       kelangsingan["klasifikasi"], "-", "-"],
-        ["Pu",                f"{inp['Pu']:.2f}",          "kN","INPUT"],
-        ["Momen Desain Mc",   f"{Mu_desain:.4f}",          "kN.m","INPUT"],
-        ["phi.Pn Kapasitas",  fv(cek["phi_Pn_kapasitas"]), "kN", "-"],
-        ["phi.Mn Kapasitas",  fv(cek["phi_Mn_kapasitas"]), "kN.m","-"],
-        ["Rasio Pu/phi.Pn",   fv(cek["ratio_Pu"]),         "-",   "OK" if (cek["ratio_Pu"] or 0)<=1 else "NOT OK"],
-        ["Rasio Mu/phi.Mn",   fv(cek["ratio_Mu"]),         "-",   "OK" if (cek["ratio_Mu"] or 0)<=1 else "NOT OK"],
-        ["STATUS AKHIR",      cek["status"],                "-",   cek["status"]],
-    ]:
-        pdf.tr(r, ws3)
-    pdf.ln(5)
-    pdf.set_font("Helvetica","",8.5)
-    pdf.multi_cell(0,5,sc(
-        f"Catatan: Perhitungan berdasarkan SNI 2847:2019. Diagram 52 titik. "
-        f"Dibuat: {nama_eng} | {tgl_lpr}"
-    ))
-
-    return bytes(pdf.output())
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-st.divider()
-st.markdown(
-    "<div style='text-align:center;color:gray;font-size:11px;'>"
-    "🏛️ Kolom Beton Bertulang | SNI 2847:2019 | Ladosi</div>",
-    unsafe_allow_html=True,
-)
