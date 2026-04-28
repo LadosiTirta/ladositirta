@@ -791,3 +791,120 @@ def run_calculation(input_data: Dict[str, Any]) -> Dict[str, Any]:
             'capacity': capacity_table,
         }
     }
+# ======================================================================
+# BAGIAN UI STREAMLIT (ANTARMUKA)
+# Tambahkan kode ini di bagian paling bawah file 7_kolomfull.py
+# ======================================================================
+
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def main():
+    st.title("Kapasitas Kolom Beton Bertulang (P-M)")
+    st.markdown("**Berdasarkan SNI 2847:2019**")
+
+    # Setup Sidebar untuk Input
+    st.sidebar.header("Input Parameter")
+
+    st.sidebar.subheader("1. Data Material")
+    fc = st.sidebar.number_input("Mutu Beton fc' (MPa)", value=30.0, step=1.0)
+    fy = st.sidebar.number_input("Mutu Baja fy (MPa)", value=400.0, step=10.0)
+    Es = st.sidebar.number_input("Modulus Elastisitas Es (MPa)", value=200000.0, step=1000.0)
+
+    st.sidebar.subheader("2. Dimensi Kolom")
+    b = st.sidebar.number_input("Lebar b (mm)", value=400.0, step=10.0)
+    h = st.sidebar.number_input("Tinggi h (mm)", value=500.0, step=10.0)
+    cover = st.sidebar.number_input("Selimut Beton (mm)", value=40.0, step=1.0)
+    ds = st.sidebar.number_input("Diameter Sengkang Øs (mm)", value=10.0, step=1.0)
+
+    st.sidebar.subheader("3. Tulangan Longitudinal")
+    D = st.sidebar.number_input("Diameter Tulangan Utama D (mm)", value=22.0, step=1.0)
+    n_b = st.sidebar.number_input("Jumlah Tulangan Sisi Lebar (b)", value=4, step=1)
+    n_h = st.sidebar.number_input("Jumlah Tulangan Sisi Tinggi (h)", value=3, step=1)
+
+    st.sidebar.subheader("4. Data Panjang & Rangka")
+    Lu = st.sidebar.number_input("Panjang Tak Tertahan Lu (mm)", value=6000.0, step=100.0)
+    frame_type = st.sidebar.selectbox("Kondisi Rangka", ["braced", "unbraced"])
+    curvature = st.sidebar.selectbox("Kelengkungan", ["single", "double"])
+
+    st.sidebar.subheader("5. Beban Terfaktor")
+    Pu = st.sidebar.number_input("Gaya Aksial Pu (kN)", value=1500.0, step=10.0)
+    M1 = st.sidebar.number_input("Momen Ujung 1 M1 (kN.m) [Kecil]", value=80.0, step=5.0)
+    M2 = st.sidebar.number_input("Momen Ujung 2 M2 (kN.m) [Besar]", value=150.0, step=5.0)
+
+    # Tombol Eksekusi
+    if st.sidebar.button("Hitung Kapasitas", type="primary"):
+        # Mapping input UI ke dictionary yang diminta oleh mesin kalkulasi
+        input_data = {
+            'fc': fc, 'fy': fy, 'Es': Es,
+            'b': b, 'h': h, 'cover': cover, 'ds': ds,
+            'D': D, 'n_b': n_b, 'n_h': n_h,
+            'Lu': Lu, 'frame_type': frame_type, 'curvature': curvature,
+            'Pu': Pu, 'M1': M1, 'M2': M2,
+            # Parameter kekakuan elemen (bisa dibuat interaktif nanti, saat ini pakai default)
+            'beta_dns': 0.6, 'b_beam': 300, 'h_beam': 500, 'L_beam': 6000,
+            'L_col_upper': 3500, 'L_col_lower': 3500
+        }
+
+        with st.spinner('Menghitung kapasitas dan membuat diagram...'):
+            result = run_calculation(input_data)
+
+        if result['status'] == 'error':
+            st.error("Terjadi Kesalahan Input:")
+            for err in result['errors']:
+                st.warning(f"- {err}")
+        else:
+            st.success("Perhitungan Selesai!")
+            tables = result['tables']
+
+            # Layout 2 Kolom untuk Tabel Hasil
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Properties Penampang")
+                st.dataframe(pd.DataFrame(tables['properties']), use_container_width=True, hide_index=True)
+
+                st.subheader("Cek Kelangsingan")
+                st.dataframe(pd.DataFrame(tables['slenderness']), use_container_width=True, hide_index=True)
+
+            with col2:
+                st.subheader("Pembesaran Momen")
+                st.dataframe(pd.DataFrame(tables['magnification']), use_container_width=True, hide_index=True)
+
+                st.subheader("Cek Kapasitas")
+                # Beri warna merah jika OVER, hijau jika OK
+                df_cap = pd.DataFrame(tables['capacity'])
+                st.dataframe(df_cap, use_container_width=True, hide_index=True)
+
+            # Plot Diagram Interaksi
+            st.divider()
+            st.subheader("Diagram Interaksi P-M")
+            
+            df_int = pd.DataFrame(tables['interaction'])
+            phi_Mn = pd.to_numeric(df_int['φMn (kN·m)'], errors='coerce')
+            phi_Pn = pd.to_numeric(df_int['φPn (kN)'], errors='coerce')
+
+            # Ambil nilai Mu untuk plotting titik beban aktual
+            Mu_str = [row['Nilai'] for row in tables['capacity'] if row['Item/Uraian'] == 'Mu (momen desain)']
+            Mu_val = float(Mu_str[0]) if Mu_str else M2
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.plot(phi_Mn, phi_Pn, 'b-', linewidth=2.5, label='Kapasitas (φPn, φMn)')
+            ax.plot(Mu_val, Pu, 'ro', markersize=8, label=f'Beban Aktual (Mu={Mu_val:.1f}, Pu={Pu:.1f})')
+            
+            ax.set_xlabel('Momen Rencana - φMn (kN.m)')
+            ax.set_ylabel('Aksial Rencana - φPn (kN)')
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.legend()
+            ax.axhline(0, color='black', linewidth=1)
+            ax.axvline(0, color='black', linewidth=1)
+            
+            st.pyplot(fig)
+
+            # Tabel 52 Titik P-M
+            with st.expander("Tampilkan Data 52 Titik Diagram Interaksi P-M"):
+                st.dataframe(df_int, use_container_width=True, hide_index=True)
+
+if __name__ == "__main__":
+    main()
