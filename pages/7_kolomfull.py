@@ -856,7 +856,8 @@ def create_pdf_report(tables, project_name="Project Kolom", engineer="Engineer N
             pdf.multi_cell(95, 7, sanitize_for_pdf(str(row['Keterangan'])), 1)
         pdf.ln(5)
     
-    return pdf.output(dest='S')
+    pdf.output(dest='S')
+    return pdf_out.encode('latin-1') if isinstance(pdf_out, str) else bytes(pdf_out)
 
 @st.cache_data
 def create_word_report(tables, project_name="Project Kolom", engineer="Engineer Name"):
