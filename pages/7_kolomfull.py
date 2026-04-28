@@ -799,7 +799,96 @@ def run_calculation(input_data: Dict[str, Any]) -> Dict[str, Any]:
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+from io import BytesIO
+from docx import Document
+from docx.shared import Inches, Pt
+from fpdf import FPDF
+import datetime
+def sanitize_for_pdf(text):
+    """Mengganti simbol khusus agar tidak menyebabkan UnicodeEncodeError di FPDF2"""
+    replacements = {
+        'φ': 'phi', 'λ': 'lambda', '√': 'sqrt', '²': '^2', '³': '^3',
+        'Σ': 'Sigma', 'π': 'pi', 'ρ': 'rho', 'ε': 'epsilon', '≤': '<=', '≥': '>='
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    return text
 
+@st.cache_data
+def create_pdf_report(tables, project_name="Project Kolom", engineer="Engineer Name"):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    
+    # --- Header ---
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, f"LAPORAN PERHITUNGAN STRUKTUR: {project_name}", ln=True, align='C')
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 5, f"Engineer: {engineer} | Tanggal: {datetime.date.today()}", ln=True, align='C')
+    pdf.line(10, 27, 200, 27)
+    pdf.ln(10)
+
+    # --- Content ---
+    for title, data in tables.items():
+        if title == 'interaction': continue # Lewati tabel 52 titik di PDF agar tidak terlalu panjang
+        
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(0, 10, title.upper().replace('_', ' '), ln=True)
+        
+        # Table Header
+        pdf.set_font("Arial", 'B', 9)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(45, 8, "Item", 1, 0, 'C', True)
+        pdf.cell(30, 8, "Nilai", 1, 0, 'C', True)
+        pdf.cell(20, 8, "Satuan", 1, 0, 'C', True)
+        pdf.cell(95, 8, "Keterangan", 1, 1, 'C', True)
+        
+        # Table Body
+        pdf.set_font("Arial", '', 8)
+        for row in data:
+            pdf.cell(45, 7, sanitize_for_pdf(str(row['Item/Uraian'])), 1)
+            pdf.cell(30, 7, sanitize_for_pdf(str(row['Nilai'])), 1)
+            pdf.cell(20, 7, sanitize_for_pdf(str(row['Satuan'])), 1)
+            pdf.multi_cell(95, 7, sanitize_for_pdf(str(row['Keterangan'])), 1)
+        pdf.ln(5)
+    
+    return pdf.output(dest='S')
+
+@st.cache_data
+def create_word_report(tables, project_name="Project Kolom", engineer="Engineer Name"):
+    doc = Document()
+    
+    # Header Section
+    section = doc.sections[0]
+    header = section.header
+    header_para = header.paragraphs[0]
+    header_para.text = f"Laporan Struktur - {project_name} | {engineer}"
+    header_para.style.font.size = Pt(9)
+
+    doc.add_heading(f'Hasil Perhitungan Kolom Beton', 0)
+    
+    for title, data in tables.items():
+        if title == 'interaction': continue
+        doc.add_heading(title.title().replace('_', ' '), level=1)
+        
+        table = doc.add_table(rows=1, cols=4)
+        table.style = 'Table Grid'
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Item'
+        hdr_cells[1].text = 'Nilai'
+        hdr_cells[2].text = 'Satuan'
+        hdr_cells[3].text = 'Keterangan'
+        
+        for row_data in data:
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(row_data['Item/Uraian'])
+            row_cells[1].text = str(row_data['Nilai'])
+            row_cells[2].text = str(row_data['Satuan'])
+            row_cells[3].text = str(row_data['Keterangan'])
+    
+    target = BytesIO()
+    doc.save(target)
+    return target.getvalue()
 def main():
     st.title("Kapasitas Kolom Beton Bertulang (P-M)")
     st.markdown("**Berdasarkan SNI 2847:2019**")
@@ -857,7 +946,45 @@ def main():
         else:
             st.success("Perhitungan Selesai!")
             tables = result['tables']
+if result['status'] == 'ok':
+            st.success("Perhitungan Selesai!")
+            tables = result['tables']
 
+            # --- TAMBAHKAN MENU DOWNLOAD DI SINI ---
+            st.divider()
+            st.subheader("📥 Download Laporan")
+            
+            # Input tambahan untuk Header Laporan
+            col_doc1, col_doc2 = st.columns(2)
+            with col_doc1:
+                proj_name = st.text_input("Nama Proyek", "Proyek Gedung A")
+            with col_doc2:
+                eng_name = st.text_input("Nama Engineer", "Istiyono")
+
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                pdf_data = create_pdf_report(tables, proj_name, eng_name)
+                st.download_button(
+                    label="Download PDF Report",
+                    data=pdf_data,
+                    file_name=f"Laporan_Kolom_{proj_name}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            
+            with col_btn2:
+                word_data = create_word_report(tables, proj_name, eng_name)
+                st.download_button(
+                    label="Download Word Report",
+                    data=word_data,
+                    file_name=f"Laporan_Kolom_{proj_name}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            st.divider()
+            # --- AKHIR MENU DOWNLOAD ---
+    
             # Layout 2 Kolom untuk Tabel Hasil
             col1, col2 = st.columns(2)
             
