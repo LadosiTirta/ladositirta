@@ -804,15 +804,19 @@ from docx import Document
 from docx.shared import Inches, Pt
 from fpdf import FPDF
 import datetime
+
 def sanitize_for_pdf(text):
     """Mengganti simbol khusus agar tidak menyebabkan UnicodeEncodeError di FPDF2"""
     replacements = {
-        'φ': 'phi', 'λ': 'lambda', '√': 'sqrt', '²': '^2', '³': '^3',
-        'Σ': 'Sigma', 'π': 'pi', 'ρ': 'rho', 'ε': 'epsilon', '≤': '<=', '≥': '>='
+        'φ': 'phi', 'λ': 'lambda', '√': 'sqrt', '²': '^2', '³': '^3', '⁴': '^4',
+        'Σ': 'Sigma', 'π': 'pi', 'ρ': 'rho', 'ε': 'epsilon', '≤': '<=', '≥': '>=',
+        '·': '.', 'Ø': 'D'
     }
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)
-    return text
+    
+    # Proteksi terakhir: paksa ke format Latin-1, ganti sisa unicode tak dikenal jadi '?'
+    return text.encode('latin-1', 'replace').decode('latin-1')
 
 @st.cache_data
 def create_pdf_report(tables, project_name="Project Kolom", engineer="Engineer Name"):
@@ -956,7 +960,7 @@ def main():
             with col_doc1:
                 proj_name = st.text_input("Nama Proyek", "Proyek Gedung A")
             with col_doc2:
-                eng_name = st.text_input("Nama Engineer", "Istiyono")
+                eng_name = st.text_input("Nama Engineer", "Ladosi")
 
             col_btn1, col_btn2 = st.columns(2)
             
