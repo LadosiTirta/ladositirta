@@ -1,3 +1,4 @@
+# calculations.py
 """
 Modul perhitungan struktur kolom beton bertulang berdasarkan SNI 2847:2019.
 Hanya berisi fungsi logika murni, tanpa antarmuka Streamlit.
