@@ -946,9 +946,6 @@ def main():
         else:
             st.success("Perhitungan Selesai!")
             tables = result['tables']
-if result['status'] == 'ok':
-            st.success("Perhitungan Selesai!")
-            tables = result['tables']
 
             # --- TAMBAHKAN MENU DOWNLOAD DI SINI ---
             st.divider()
@@ -983,8 +980,7 @@ if result['status'] == 'ok':
                     use_container_width=True
                 )
             st.divider()
-            # --- AKHIR MENU DOWNLOAD ---
-    
+            # --- AKHIR MENU DOWNLOAD ---    
             # Layout 2 Kolom untuk Tabel Hasil
             col1, col2 = st.columns(2)
             
