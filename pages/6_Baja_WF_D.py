@@ -189,7 +189,7 @@ def hitung_kapasitas_wf(d, bf, tw, tf, r, Fy, E, Lb, Cb):
 # =============================================================================
 # ANTARMUKA STREAMLIT
 # =============================================================================
-st.title("🔩 Kapasitas Penampang Baja Profil WF (DeepSeek)")
+st.title("🔩 Kapasitas Penampang Baja Profil WF ")
 st.markdown("Standar: **SNI 1729:2020 & AISC 360-16** (Metode LRFD dan ASD)")
 st.markdown("---")
 
