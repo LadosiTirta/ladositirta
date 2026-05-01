@@ -708,3 +708,4 @@ def create_pdf_report(data):
     # Simpan sebagai bytes
     pdf_out = pdf.output(dest='S')  # string bytes
     return pdf_out if isinstance(pdf_out, bytes) else pdf_out.encode('latin-1')
+
