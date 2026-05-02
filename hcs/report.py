@@ -2067,14 +2067,11 @@ class _PdfReport(FPDF):
         st_ll     = str  (_g(ss,"def_status_ll",       "N/A"))
         st_tot    = str  (_g(ss,"def_status_total",    "N/A"))
 
-        self._h1("7.  Deflection and Camber")
-        self._note("Ref: PCI 8th Ed. Sec. 4.8 & Table 4.8.3  |  ACI 318-19 Table 24.2.2")
-
-        self._h2("7.1  Initial Prestress Camber  (upward, parabolic tendon)")
-        self._calc("  delta_ps  =  5 x Pe x e_bot x L^2  /  (48 x Ec_ci x In)",
-                   "PCI 8th Ed. Eq. 4.8.1")
+        self._h2("7.1  Initial Prestress Camber  (upward, straight tendon)")
+        self._calc("  delta_ps  =  Pe x e_bot x L^2  /  (8 x Ec_ci x In)",
+           "PCI 8th Ed. Eq. 4.8.1  [straight tendon]")
         self._calc(
-            f"  delta_ps  =  5x{Pe*1000:.0f}x{e_bot:.2f}x{L_an:.0f}^2 / (48x{Ec_hcs:.0f}x{In:.3e})"
+            f"  delta_ps  =  {Pe*1000:.0f}x{e_bot:.2f}x{L_an:.0f}^2 / (8x{Ec_hcs:.0f}x{In:.3e})"
         )
         self._calc(f"           =  {delta_ps:.4f} mm  (upward)")
 
