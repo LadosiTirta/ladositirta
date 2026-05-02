@@ -4,14 +4,12 @@
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
 # Units: SI only (mm, kN, MPa)
 # CHANGE LOG:
-#   FIX-1: SW_HCS formula corrected (/1000)
+#   FIX-1: SW_HCS formula corrected
 #   FIX-2: Tab reorder, preset guard, beam width for span, line loads
 #   FIX-3: Custom LF per load, line load with position, seismic detail,
-#           UI fully in English
-#   FIX-4: Editable PCI multipliers, thermal camber, custom defl limits,
-#           vibration / natural frequency check (AISC DG11 / ISO 10137)
-#   FIX-5: Timezone offset, Assumed loss input, Shoring input (multiple supports),
-#           SFD/BMD fix, combined with all features of arsip4
+#           UI fully in English, SW_HCS root-cause fixed (always recalc)
+#   FIX-4: Line load x_line_end crash fix, SW_HCS /1000 statt /1e6
+#           Half slab core input confirmed, shoring input added
 # =============================================================================
 
 import streamlit as st
@@ -19,7 +17,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 import math
 
 # hcs imports
@@ -32,7 +30,7 @@ from hcs.section_props import get_all_section_props
 from hcs.prestress_loss import get_prestress_losses
 from hcs.stress_check import get_all_stress_checks
 from hcs.capacity import get_capacity_results
-from hcs.deflection import get_deflection_results, get_pci_multiplier_defaults
+from hcs.deflection import get_deflection_results
 from hcs.report import get_report_bytes
 
 st.set_page_config(
@@ -84,10 +82,7 @@ def init_session_state():
         "span_type": "Clear span",
         # Construction shoring
         "has_construction_shoring": False,
-        "n_support": 1,           # number of temporary supports
-        "dist_support_left": 0.0,  # mm from left support (if n_support=1, auto mid)
-        "dist_support_right": 0.0, # mm from right support (if n_support=1, auto mid)
-        "L_shored": 3000,          # calculated effective span
+        "L_shored": 3000,            # mm — span between temporary supports
         # Loads — area
         "SDL": 1.5, "LL": 2.0,
         # Load factors (FIX-3: per-load)
@@ -112,26 +107,6 @@ def init_session_state():
         "sdc": "B",
         # Loss parameters
         "RH": 75.0, "V_S": 38.0, "vs_auto": True,
-        "assumed_loss_pct": 20.0,   # assumed total loss (%)
-        # Deflection settings (PCI multipliers & limits)
-        "mult_camber_erection": 1.85,
-        "mult_dw_erection":     1.85,
-        "mult_camber_final":    2.70,
-        "mult_dw_final":        2.40,
-        "mult_sdl_final":       3.00,
-        "mult_ll_final":        1.00,
-        "limit_LL_fraction":    360,
-        "limit_total_fraction": 240,
-        "defl_structure_type":  "Office floor (L/360 LL, L/240 total)",
-        # Thermal
-        "has_thermal": False,
-        "alpha_T": 10e-6,
-        "delta_T": 0.0,
-        # Vibration
-        "vibration_mode": "Walking / Occupancy",
-        "damping_ratio": 3.0,
-        # Timezone
-        "tz_offset": 7.0,  # WIB default
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -173,9 +148,12 @@ def calc_SW_HCS(wc, b_bottom, h, A_voids_total, hcs_type):
     """
     SW_HCS [kN/m²] = wc [kN/m³] × (A_conc [mm²] / b_bottom [mm]) / 1000
     Example HCS200: 24 × ((1199×200 - 63959) / 1199) / 1000 ≈ 3.52 kN/m²
+    FIX: divide by 1000, not 1e6.
     """
     A_conc = float(b_bottom) * float(h) - float(A_voids_total)
     A_conc = max(A_conc, 0.0)
+    # wc kN/m³, A_conc/b_bottom yields mm of equivalent solid thickness
+    # /1000 converts mm→m ⇒ kN/m²
     return float(wc) * (A_conc / float(b_bottom)) / 1000.0
 
 def calc_SW_topping(wc_top, t_topping, has_topping):
@@ -190,26 +168,26 @@ def calc_SW_topping(wc_top, t_topping, has_topping):
 init_session_state()
 _ss = st.session_state
 
-# ── Timezone offset from sidebar (will be set below) ──────────────────────────
-_tz_offset = _ss.get("tz_offset", 7.0)
+# ── Local time (WIB = UTC+7, for Jakarta / Jabodetabek users) ────────────────
+import datetime as _dt_mod
 _ss["report_datetime"] = (
-    datetime.utcnow() + timedelta(hours=_tz_offset)
-).strftime("%d %B %Y   %H:%M") + f"  (UTC{_tz_offset:+.1f})"
+    _dt_mod.datetime.utcnow() + _dt_mod.timedelta(hours=7)
+).strftime("%d %B %Y   %H:%M") + "  (WIB / UTC+7)"
 
-# PRESET GUARD
+# PRESET GUARD — runs before any tab widget to avoid stale state
 if _ss.get("_preset_applied") != _ss["preset"]:
     apply_preset(_ss["preset"])
     _ss["_preset_applied"] = _ss["preset"]
     st.rerun()
 
 # =============================================================================
-# AUTO-CALCULATIONS
+# AUTO-CALCULATIONS  (every rerun — always recalculate, never use stale cache)
 # =============================================================================
 
-# ── 1. Geometry ──────────────────────────────────────────────────────────────
+# ── 1. Geometry: always recompute from inputs ─────────────────────────────────
 _A_core_1     = calc_core_area(_ss["core_shape"], _ss["d_core"],
                                 _ss["h_straight"], _ss["h_taper"])
-_A_voids_total = float(_ss["n_core"]) * _A_core_1
+_A_voids_total = float(_ss["n_core"]) * _A_core_1   # <-- FIX: never use _ss["A_voids_total"] here
 _h_core_val   = calc_h_core(_ss["core_shape"], _ss["d_core"],
                              _ss["h_straight"], _ss["h_taper"])
 _bw_shear     = float(_ss["b_bottom"]) - float(_ss["n_core"]) * float(_ss["d_core"])
@@ -225,14 +203,14 @@ _ss["Ec_hcs"] = _Ec_hcs
 _ss["Ec_top"] = _Ec_top
 _ss["n_mod"]  = _n_mod
 
-# ── 3. SW_HCS ────────────────────────────────────────────────────────────────
+# ── 3. SW_HCS — always recomputed from fresh _A_voids_total ──────────────────
 _SW_HCS     = calc_SW_HCS(_ss["wc"], _ss["b_bottom"], _ss["h"],
                            _A_voids_total, _ss["hcs_type"])
 _SW_topping = calc_SW_topping(_ss["wc_top"], _ss["t_topping"], _ss["has_topping"])
 _ss["SW_HCS"]     = _SW_HCS
 _ss["SW_topping"] = _SW_topping
 
-# ── 4. V/S auto ──────────────────────────────────────────────────────────────
+# ── 4. V/S auto ───────────────────────────────────────────────────────────────
 if _ss.get("vs_auto", True):
     _A_conc_vs = float(_ss["b_bottom"]) * float(_ss["h"]) - _A_voids_total
     _perim_vs  = 2.0 * (float(_ss["b_bottom"]) + float(_ss["h"]))
@@ -273,12 +251,13 @@ _ss["Pi"]      = _Pi_val
 _ss["dp_bot"]  = _dp_bot
 _ss["dp_top"]  = _dp_top
 
-# ── 8. Factored load diagrams ───────────────────────────────────────────────
+# ── 8. Factored load diagrams (FIX-3: pass custom LF + line loads) ────────────
+# Resolve x_line_end — clamp to current L_an*1.1 to prevent ValueAboveMaxError
 _x_end_max  = int(_L_an * 1.1)
 _x_line_end = int(_ss.get("x_line_end", int(_L_an)))
 if _x_line_end <= 0:
     _x_line_end = int(_L_an)
-_x_line_end = min(_x_line_end, _x_end_max)
+_x_line_end = min(_x_line_end, _x_end_max)   # CRITICAL: prevent widget crash
 _ss["x_line_end"] = _x_line_end
 
 _ld = calc_factored_loads_and_diagrams(
@@ -290,10 +269,12 @@ _ld = calc_factored_loads_and_diagrams(
     P1_DL=_ss["P1_DL"], P1_LL=_ss["P1_LL"], x_P1=_ss["x_P1"],
     P2_DL=_ss["P2_DL"], P2_LL=_ss["P2_LL"], x_P2=_ss["x_P2"],
     slab_position=_ss["slab_position"], N=200,
+    # FIX-3 custom load factors
     lf_DL=_ss["lf_DL"],   lf_LL=_ss["lf_LL"],
     lf_SDL=_ss["lf_SDL"],
     lf_P1DL=_ss["lf_P1DL"], lf_P1LL=_ss["lf_P1LL"],
     lf_P2DL=_ss["lf_P2DL"], lf_P2LL=_ss["lf_P2LL"],
+    # FIX-3 line loads
     w_line_DL=_ss["w_line_DL"]    if _ss["has_line_load"] else 0.0,
     w_line_LL=_ss["w_line_LL"]    if _ss["has_line_load"] else 0.0,
     x_line_start=float(_ss["x_line_start"]),
@@ -304,6 +285,7 @@ _ld = calc_factored_loads_and_diagrams(
 for _k, _v in _ld.items():
     _ss[f"lb_{_k}"] = _v
 
+# wu display using user LF
 _wu_user = (_ss["lf_DL"] * (_SW_HCS + _SW_topping)
             + _ss["lf_SDL"] * _ss["SDL"]
             + _ss["lf_LL"]  * _ss["LL"])
@@ -347,9 +329,6 @@ st.markdown("""
 
 with st.sidebar:
     st.markdown("### 📐 HCS Design App")
-    # Timezone selector
-    st.number_input("UTC offset (hours)", -12.0, 14.0, _ss.get("tz_offset", 7.0), 0.5,
-                    key="tz_offset", help="Your local time zone relative to UTC")
     st.markdown("---")
     st.markdown(
         "✔ A — Section<br>✔ B — Materials<br>✔ C — Span<br>"
@@ -447,6 +426,7 @@ with tab_A:
                      "Capsule":  "h_core = d_core + h_straight (circle + rectangle)",
                      "Teardrop": "h_core = d_core + h_taper (circle + taper)"}
             st.info(_desc[_ss["core_shape"]])
+
         col1, col2, col3, col4 = st.columns(4)
         with col1: _ss["d_core"]     = st.number_input("d_core (mm)",     40, 300, int(_ss["d_core"]),     1, key="_d_core")
         with col2: _ss["n_core"]     = st.number_input("n_core",           1,  20, int(_ss["n_core"]),     1, key="_n_core")
@@ -456,6 +436,8 @@ with tab_A:
             _ss["h_straight"] = st.number_input("h_straight (mm)", 0, 400, int(_ss["h_straight"]), 5, key="_h_straight")
         if _ss["core_shape"] == "Teardrop":
             _ss["h_taper"]    = st.number_input("h_taper (mm)",    0, 400, int(_ss["h_taper"]),    5, key="_h_taper")
+
+        # Recalc for live display (also sets _ss, used by auto-calc on next rerun)
         _A1  = calc_core_area(_ss["core_shape"], _ss["d_core"], _ss["h_straight"], _ss["h_taper"])
         _Av  = _ss["n_core"] * _A1
         _hcv = calc_h_core(_ss["core_shape"], _ss["d_core"], _ss["h_straight"], _ss["h_taper"])
@@ -471,6 +453,8 @@ with tab_A:
             </div>""", unsafe_allow_html=True)
         st.markdown("---")
     else:
+        # Half Slab = HCS with top flange REMOVED. Cores are still present.
+        # tf_top = 0 (forced above). Enter core geometry same as Full HCS.
         section_hdr("A.3", "Core Geometry (Half Slab — tf_top=0, cores present)")
         st.info(
             "Half Slab = hollow core slab with top flange removed (tf_top = 0).  "
@@ -520,6 +504,7 @@ with tab_A:
     _wused   = 2 * _ss["gap_side"] + _ss["n_core"] * _ss["d_core"] + (_ss["n_core"] - 1) * _ss["gap_between"]
     _chk2    = _wused <= _ss["b_bottom"]
     _chk3    = _ss["gap_between"] >= 25
+    # FIX B: use _A_voids_total (local fresh) not _ss["A_voids_total"] (stale)
     _sw_prev  = calc_SW_HCS(_ss["wc"], _ss["b_bottom"], _ss["h"],
                              _A_voids_total, _ss["hcs_type"])
     _swtprev  = calc_SW_topping(_ss["wc_top"], _ss["t_topping"], _ss["has_topping"])
@@ -529,7 +514,8 @@ with tab_A:
                    badge_html(f"Width fit: {_wused} ≤ {_ss['b_bottom']}", "OK" if _chk2 else "WARN") + "  " +
                    badge_html("gap_between ≥ 25 mm", "OK" if _chk3 else "WARN"))
     else:
-        _hchk_hs = 0 + _hcv2 + _ss["tf_bot"]
+        # Half Slab: tf_top=0, validate core + width
+        _hchk_hs = 0 + _hcv2 + _ss["tf_bot"]  # tf_top=0 for Half Slab
         _chk1_hs = abs(_hchk_hs - _ss["h"]) < 1.0
         _badges  = (badge_html(f"Half Slab — core+tf_bot: {_hchk_hs:.1f} mm (h={_ss['h']})",
                                "OK" if _chk1_hs else "ERR") + "  " +
@@ -642,7 +628,7 @@ with tab_B:
     st.markdown("---")
 
     section_hdr("B.3", "Loss Parameters")
-    with st.expander("⚙️ Settings (RH, V/S, Assumed Loss)", expanded=False):
+    with st.expander("⚙️ Settings (RH, V/S)", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
             _ss["RH"] = st.slider("RH — Relative Humidity (%)", 40.0, 100.0, _ss["RH"], 1.0, key="_rh")
@@ -657,13 +643,6 @@ with tab_B:
                 st.caption(f"V/S = A_conc / Perimeter = {_Acvs:.0f} / {_pvs:.0f} = {_ss['V_S']:.1f} mm")
             else:
                 _ss["V_S"] = st.number_input("V/S (mm) — manual", 20.0, 100.0, _ss["V_S"], 1.0, key="_vs")
-        st.markdown("---")
-        # Assumed loss input
-        _ss["assumed_loss_pct"] = st.number_input(
-            "Assumed total prestress loss (%)",
-            0.0, 50.0, float(_ss.get("assumed_loss_pct", 20.0)), 0.5,
-            help="Initial guess for total loss; actual loss computed below"
-        )
     if "pl_total_MPa" in _ss:
         section_hdr("B.3b", "Loss Results (auto)")
         col1, col2, col3 = st.columns(3)
@@ -672,17 +651,10 @@ with tab_B:
         col3.metric("fse",        f"{_ss['pl_fse']:.1f} MPa")
         st.caption(f"ES={_ss['pl_ES']:.1f} | CR={_ss['pl_CR']:.1f} | "
                    f"SH={_ss['pl_SH']:.1f} | RE={_ss['pl_RE']:.1f} MPa")
-
-        _assumed = _ss.get("assumed_loss_pct", 20.0)
-        _actual_pct = _ss.get("pl_total_pct", 0.0)
-        _loss_ok = _assumed >= _actual_pct * 0.95  # assumed should be ≥ ~95% of actual
-        st.metric("Assumed loss", f"{_assumed:.1f} %",
-                  delta=f"vs actual {_actual_pct:.1f}% → {'OK' if _loss_ok else 'WARNING'}",
-                  delta_color="normal" if _loss_ok else "inverse")
         st.success(f"Effective prestress force Pe = {_ss['pl_Pe']:.1f} kN")
 
 # =============================================================================
-# TAB C — Span
+# TAB C — Span  (FIX-3 Addition 3: beam width display clarified)
 # =============================================================================
 with tab_C:
     section_hdr("C.1", "Span & Support Geometry")
@@ -720,6 +692,7 @@ with tab_C:
     _bm2  = max(_Lcl2 / 180.0, 50.8)
     _ss["L_clear"] = _Lcl2; _ss["L_an"] = _Lan2; _ss["bear_min"] = _bm2
 
+    # Bearing length available = (bw_beam - panel_gap) / 2
     _panel_gap = float(_ss["b_nominal"]) - float(_ss["b_bottom"])
     _bear_avail_L = (float(_ss["bw_beam_L"]) - _panel_gap) / 2.0
     _bear_avail_R = (float(_ss["bw_beam_R"]) - _panel_gap) / 2.0
@@ -737,6 +710,7 @@ with tab_C:
         "Bearing length available = (bw_beam − panel_gap) / 2"
         f"  |  panel_gap = b_nominal − b_bottom = {_panel_gap:.0f} mm"
     )
+
     col1, col2, col3 = st.columns(3)
     col1.metric("L_clear", f"{_Lcl2:.0f} mm")
     col2.metric("b_bear_L", f"{_ss['b_bear_L']} mm",
@@ -756,10 +730,10 @@ with tab_C:
                 unsafe_allow_html=True)
 
 # =============================================================================
-# TAB D — Loads
-# (Sama seperti sebelumnya, hanya perbaikan satuan grafik)
+# TAB D — Loads  (FIX-3: custom LF per load, line load with position)
 # =============================================================================
 with tab_D:
+    # D.1 Self-Weight
     section_hdr("D.1", "Self-Weight (auto from Tab A & B)")
     st.markdown(
         f"""<div class="metric-grid">
@@ -774,8 +748,12 @@ with tab_D:
     )
     st.markdown("---")
 
+    # D.2 Area loads with per-load LF  (FIX-3 Addition 2)
     section_hdr("D.2", "Area Loads — Superimposed Dead & Live")
-    st.caption("Default load factors: ASCE 7 / ACI 318-19 Table 5.3.1.")
+    st.caption(
+        "Default load factors: ASCE 7 / ACI 318-19 Table 5.3.1.  "
+        "For vehicle wheel loads, use LF per applicable code."
+    )
     col1, col2, col3 = st.columns([3, 1, 3])
     with col1:
         _ss["SDL"] = st.number_input("SDL — Superimposed Dead Load (kN/m²)",
@@ -786,6 +764,7 @@ with tab_D:
     with col3:
         st.markdown(f"*Factored SDL = {_ss['lf_SDL']:.2f} × {_ss['SDL']:.2f} = "
                     f"**{_ss['lf_SDL']*_ss['SDL']:.3f} kN/m²***")
+
     col1, col2, col3 = st.columns([3, 1, 3])
     with col1:
         _ss["LL"] = st.number_input("LL — Live Load (kN/m²)",
@@ -796,7 +775,9 @@ with tab_D:
     with col3:
         st.markdown(f"*Factored LL = {_ss['lf_LL']:.2f} × {_ss['LL']:.2f} = "
                     f"**{_ss['lf_LL']*_ss['LL']:.3f} kN/m²***")
-    _wu_disp = (_ss["lf_DL"] * (_ss["SW_HCS"] + _ss["SW_topping"])
+
+    _wu_disp = (_ss["lf_DL"] * (_SS_HCS := _ss["SW_HCS"])
+                + _ss["lf_DL"] * _ss["SW_topping"]
                 + _ss["lf_SDL"] * _ss["SDL"]
                 + _ss["lf_LL"]  * _ss["LL"])
     st.markdown(
@@ -811,6 +792,7 @@ with tab_D:
     )
     st.markdown("---")
 
+    # D.3 Global DL/LL factor (for SW)
     section_hdr("D.3", "Dead Load Factor (for Self-Weight)")
     col1, col2 = st.columns(2)
     with col1:
@@ -821,27 +803,34 @@ with tab_D:
                   f"{_ss['lf_DL'] * (_ss['SW_HCS'] + _ss['SW_topping']):.3f} kN/m²")
     st.markdown("---")
 
+    # D.4 Line Load (FIX-3 Addition 1)
     section_hdr("D.4", "Line Load Along Span (Longitudinal)")
-    st.caption("Use for partition walls or beams running **parallel to the HCS span**.\n"
-               "For a wall **perpendicular to span** (transverse): enter as equivalent Point Load below.")
+    st.caption(
+        "Use for partition walls or beams running **parallel to the HCS span**.\n"
+        "For a wall **perpendicular to span** (transverse): enter as equivalent Point Load below."
+    )
     _ss["has_line_load"] = st.checkbox("Line load present?", _ss["has_line_load"], key="_has_line_load")
     if _ss["has_line_load"]:
         col1, col2, col3 = st.columns([3, 1, 3])
         with col1:
-            _ss["w_line_DL"] = st.number_input("w_line_DL — Dead line load (kN/m)",
-                                                0.0, 500.0, float(_ss["w_line_DL"]), 0.5, key="_w_line_DL")
+            _ss["w_line_DL"] = st.number_input(
+                "w_line_DL — Dead line load (kN/m)",
+                0.0, 500.0, float(_ss["w_line_DL"]), 0.5, key="_w_line_DL")
             st.caption("e.g. partition wall along span")
         with col2:
             st.markdown("**LF:**")
             _ss["lf_line_DL"] = st.number_input("γ_lineDL", 1.0, 2.5,
                                                   float(_ss["lf_line_DL"]), 0.05, key="_lf_line_DL")
         with col3:
-            _ss["w_line_LL"] = st.number_input("w_line_LL — Live line load (kN/m)",
-                                                0.0, 500.0, float(_ss["w_line_LL"]), 0.5, key="_w_line_LL")
+            _ss["w_line_LL"] = st.number_input(
+                "w_line_LL — Live line load (kN/m)",
+                0.0, 500.0, float(_ss["w_line_LL"]), 0.5, key="_w_line_LL")
+
         col1, col2, col3 = st.columns([3, 1, 3])
         with col1:
-            _ss["x_line_start"] = st.number_input("x_line_start — Start from left support (mm)",
-                                                  0, int(_L_an), int(_ss["x_line_start"]), 50, key="_x_line_start")
+            _ss["x_line_start"] = st.number_input(
+                "x_line_start — Start from left support (mm)",
+                0, int(_L_an), int(_ss["x_line_start"]), 50, key="_x_line_start")
         with col2:
             st.markdown("**LF LL:**")
             _ss["lf_line_LL"] = st.number_input("γ_lineLL", 1.0, 2.5,
@@ -849,8 +838,10 @@ with tab_D:
         with col3:
             _x_end_max_w = int(_L_an * 1.1)
             _x_end_val_w = min(int(_ss.get("x_line_end", int(_L_an))), _x_end_max_w)
-            _ss["x_line_end"] = st.number_input("x_line_end — End position from left (mm)",
-                                                0, _x_end_max_w, _x_end_val_w, 50, key="_x_line_end")
+            _ss["x_line_end"] = st.number_input(
+                "x_line_end — End position from left (mm)",
+                0, _x_end_max_w, _x_end_val_w, 50, key="_x_line_end")
+
         _wu_line_show = _ss["lf_line_DL"] * _ss["w_line_DL"] + _ss["lf_line_LL"] * _ss["w_line_LL"]
         _line_len_m   = (float(_ss["x_line_end"]) - float(_ss["x_line_start"])) / 1000.0
         st.markdown(
@@ -864,10 +855,14 @@ with tab_D:
         st.info("No longitudinal line load. For transverse wall → use Point Loads section.")
     st.markdown("---")
 
+    # D.5 Point Loads with per-load LF  (FIX-3 Addition 2)
     section_hdr("D.5", "Point Loads")
     _ss["has_point_load"] = st.checkbox("Point loads present?", _ss["has_point_load"], key="_has_point_load")
     if _ss["has_point_load"]:
-        st.caption("P1 & P2 = concentrated loads (kN). x = distance from left support (mm).")
+        st.caption(
+            "P1 & P2 = concentrated loads (kN). x = distance from left support (mm).  "
+            "Default LF: ACI 318-19 Table 5.3.1."
+        )
         st.markdown("**Load P1**")
         col1, col2, col3, col4, col5 = st.columns([3, 1, 3, 1, 3])
         with col1:
@@ -880,6 +875,7 @@ with tab_D:
             _ss["lf_P1LL"] = st.number_input("γ ", 1.0, 2.5, float(_ss["lf_P1LL"]), 0.05, key="_lf_P1LL")
         with col5:
             _ss["x_P1"] = st.number_input("x_P1 (mm)", 0, step=50, value=int(_ss["x_P1"]), key="_x_P1")
+
         st.caption(f"Pu1 = {_ss['lf_P1DL']:.2f}×{_ss['P1_DL']:.1f} + {_ss['lf_P1LL']:.2f}×{_ss['P1_LL']:.1f} "
                    f"= **{_ss['lf_P1DL']*_ss['P1_DL']+_ss['lf_P1LL']*_ss['P1_LL']:.1f} kN** (before eff. width factor)")
 
@@ -895,6 +891,7 @@ with tab_D:
             _ss["lf_P2LL"] = st.number_input("γ   ", 1.0, 2.5, float(_ss["lf_P2LL"]), 0.05, key="_lf_P2LL")
         with col5:
             _ss["x_P2"] = st.number_input("x_P2 (mm)", 0, step=50, value=int(_ss["x_P2"]), key="_x_P2")
+
         _ss["slab_position"] = st.radio(
             "Slab position (for effective width reduction — PCI Fig. 4.10.1.1)",
             ["Interior slab", "Edge slab"],
@@ -902,6 +899,7 @@ with tab_D:
             horizontal=True, key="_slab_position")
     st.markdown("---")
 
+    # D.6 Factored Load Summary
     section_hdr("D.6", "Factored Load Summary (auto)")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("wu (kN/m²)",   f"{_ss.get('lb_wu_area', 0):.3f}")
@@ -1034,6 +1032,28 @@ with tab_F:
 with tab_G:
     st.markdown("## G · Stress Checks")
     st.caption("Ref: ACI/PCI 319-25 Table 24.5.3.1 | Sign: compression (−), tension (+)")
+
+    # Shoring input for construction stage
+    st.markdown("---")
+    section_hdr("G.0", "Construction Stage — Topping Pour Support")
+    _ss["has_construction_shoring"] = st.checkbox(
+        "Temporary shoring during topping pour?",
+        value=_ss.get("has_construction_shoring", False),
+        help="If checked, the span can be reduced to the shored distance."
+    )
+    if _ss["has_construction_shoring"]:
+        _ss["L_shored"] = st.number_input(
+            "Shored span length L_shored (mm)",
+            500, int(_ss["L_an"]), int(_ss.get("L_shored", 3000)), 100,
+            help="Distance between temporary supports. Moments during wet topping will be computed for this span."
+        )
+        st.caption("Note: This value must be used in the stress_check module (hcs.stress_check) "
+                   "to recalculate M_dl for the construction stage with the reduced span.")
+    else:
+        _ss["L_shored"] = _ss["L_an"]
+        st.info("No shoring → full span used for construction stress checks.")
+
+    st.markdown("---")
     if "sc_transfer" not in _ss:
         st.info("Calculating stress checks...")
     else:
@@ -1100,283 +1120,37 @@ with tab_H:
             st.plotly_chart(_fig3, use_container_width=True)
 
 # =============================================================================
-# TAB I — Deflection & Camber  (FIX-4 Enhanced)
+# TAB I — Deflection
 # =============================================================================
 with tab_I:
     st.markdown("## I · Deflection & Camber")
-    st.caption(
-        "Ref: PCI Design Handbook 8th Ed. Sec. 4.8 & Table 4.8.3  |  "
-        "ACI 318-19 Table 24.2.2  |  AISC DG11 (Vibration)"
-    )
-
-    # ── I.0  PCI Multipliers (editable) ──────────────────────────────────────
-    from hcs.deflection import get_pci_multiplier_defaults
-    _has_top_defl = _ss.get("has_topping", False)
-    _pci_def = get_pci_multiplier_defaults(_has_top_defl)
-
-    with st.expander("⚙️ PCI Long-Term Multipliers (editable)", expanded=False):
-        st.caption(
-            "Defaults: PCI Design Handbook 8th Ed. Table 4.8.3. "
-            "Modify only with engineering judgment."
-        )
-        _top_label = "WITH topping" if _has_top_defl else "WITHOUT topping"
-        st.markdown(f"**{_top_label}** — currently active defaults:")
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            _ss["mult_camber_erection"] = st.number_input(
-                "Camber at erection (×)",
-                0.5, 5.0, float(_ss.get("mult_camber_erection", _pci_def["mult_camber_erection"])),
-                0.05, key="_mult_camber_erect")
-            _ss["mult_dw_erection"] = st.number_input(
-                "SW defl at erection (×)",
-                0.5, 5.0, float(_ss.get("mult_dw_erection", _pci_def["mult_dw_erection"])),
-                0.05, key="_mult_dw_erect")
-        with col2:
-            _ss["mult_camber_final"] = st.number_input(
-                "Final camber (×)",
-                0.5, 5.0, float(_ss.get("mult_camber_final", _pci_def["mult_camber_final"])),
-                0.05, key="_mult_camber_final")
-            _ss["mult_dw_final"] = st.number_input(
-                "Final SW deflection (×)",
-                0.5, 5.0, float(_ss.get("mult_dw_final", _pci_def["mult_dw_final"])),
-                0.05, key="_mult_dw_final")
-        with col3:
-            _ss["mult_sdl_final"] = st.number_input(
-                "Final SDL deflection (×)",
-                0.5, 5.0, float(_ss.get("mult_sdl_final", _pci_def["mult_sdl_final"])),
-                0.05, key="_mult_sdl_final")
-            _ss["mult_ll_final"] = st.number_input(
-                "LL deflection factor (×)",
-                0.5, 2.0, float(_ss.get("mult_ll_final", _pci_def["mult_ll_final"])),
-                0.05, key="_mult_ll_final")
-
-        if st.button("🔄 Reset to PCI Defaults", key="_reset_pci_mult"):
-            for _mk, _mv in _pci_def.items():
-                _ss[_mk] = _mv
-            st.rerun()
-
-        st.markdown(
-            "| Stage | Camber | SW defl | SDL | LL |\n"
-            "|---|---|---|---|---|\n"
-            f"| At erection | ×{_ss.get('mult_camber_erection',1.85):.2f} | "
-            f"×{_ss.get('mult_dw_erection',1.85):.2f} | — | — |\n"
-            f"| Final | ×{_ss.get('mult_camber_final',2.70):.2f} | "
-            f"×{_ss.get('mult_dw_final',2.40):.2f} | "
-            f"×{_ss.get('mult_sdl_final',3.00):.2f} | "
-            f"×{_ss.get('mult_ll_final',1.00):.2f} |"
-        )
-
-    st.markdown("---")
-
-    # ── I.1  Instantaneous results ────────────────────────────────────────────
-    section_hdr("I.1", "Instantaneous Deflection at Release")
+    st.caption("Ref: PCI Handbook 8th Ed. Sec. 4.8 & Table 4.8.3 | ACI 318-19 Table 24.2.2")
     if "def_delta_ps_initial" not in _ss:
         st.info("Calculating deflections...")
     else:
+        st.markdown("### Initial (at release)")
+        col1, col2 = st.columns(2)
+        col1.metric("Prestress camber",       f"{_ss['def_delta_ps_initial']:.2f} mm  ↑")
+        col2.metric("Self-weight deflection",  f"{_ss['def_delta_sw']:.2f} mm  ↓")
+        st.metric("Net at release", f"{_ss['def_net_release']:.2f} mm")
+
+        st.markdown("### Long-term (final stage)")
+        col1, col2 = st.columns(2)
+        col1.metric("Final camber (×multiplier)", f"{_ss['def_delta_ps_initial']*2.0:.2f} mm")
+        col2.metric("Total long-term",             f"{_ss['def_total_longterm']:.2f} mm")
+
+        st.markdown("### Code Limit Checks (ACI 318-19 Table 24.2.2)")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Prestress camber",      f"{_ss['def_delta_ps_initial']:+.2f} mm  ↑")
-        col2.metric("Self-weight defl.",     f"{_ss['def_delta_sw']:+.2f} mm  ↓")
-        col3.metric("Net at release",        f"{_ss['def_net_release']:+.2f} mm")
-        st.caption(
-            "Sign: (+) = upward camber, (−) = downward deflection. "
-            "e = eccentricity of PS centroid below section NA."
-        )
-
-        st.markdown("---")
-        section_hdr("I.2", "Long-term Deflection (Final Stage)")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Final camber",
-                    f"{_ss.get('def_final_camber', _ss['def_delta_ps_initial']*2.0):+.2f} mm")
-        col2.metric("Final SW defl.",
-                    f"{_ss.get('def_final_sw', _ss['def_delta_sw']*2.0):+.2f} mm")
-        col3.metric("Final SDL defl.",
-                    f"{_ss.get('def_final_sdl', _ss['def_delta_sdl']*3.0):+.2f} mm")
-        col4.metric("LL defl. (instantaneous)",
-                    f"{_ss.get('def_final_ll', _ss['def_delta_ll']):+.2f} mm")
-        st.metric("Total net long-term deflection", f"{_ss['def_total_longterm']:+.2f} mm")
-
-        st.markdown("---")
-        section_hdr("I.3", "Code Limit Checks")
-
-        # ── Editable deflection limits ─────────────────────────────────────
-        with st.expander("⚙️ Deflection Limits (editable)", expanded=False):
-            _struct_opts = [
-                "Office floor (L/360 LL, L/240 total)",
-                "Warehouse / Factory (L/240 LL, L/180 total)",
-                "Roof (L/240 LL, L/180 total)",
-                "Custom",
-            ]
-            _struct_presets = {
-                "Office floor (L/360 LL, L/240 total)":          (360, 240),
-                "Warehouse / Factory (L/240 LL, L/180 total)":   (240, 180),
-                "Roof (L/240 LL, L/180 total)":                   (240, 180),
-                "Custom":                                          (None, None),
-            }
-            _ss["defl_structure_type"] = st.selectbox(
-                "Structure type", _struct_opts,
-                index=_struct_opts.index(_ss.get("defl_structure_type", _struct_opts[0])),
-                key="_defl_struct_type")
-
-            _preset_lls, _preset_tot = _struct_presets[_ss["defl_structure_type"]]
-            if _preset_lls is not None:
-                _ss["limit_LL_fraction"]    = _preset_lls
-                _ss["limit_total_fraction"] = _preset_tot
-
-            col1, col2 = st.columns(2)
-            with col1:
-                _ss["limit_LL_fraction"] = st.number_input(
-                    "L / [n] for LL limit", 100, 1000,
-                    int(_ss.get("limit_LL_fraction", 360)), 10, key="_lim_ll_frac")
-            with col2:
-                _ss["limit_total_fraction"] = st.number_input(
-                    "L / [n] for total deflection limit", 100, 1000,
-                    int(_ss.get("limit_total_fraction", 240)), 10, key="_lim_tot_frac")
-
-            _L_disp = float(_ss.get("L_an", 5850))
-            st.markdown(
-                f"**LL limit**    = L / {_ss['limit_LL_fraction']} = "
-                f"{_L_disp / _ss['limit_LL_fraction']:.1f} mm  |  "
-                f"**Total limit** = L / {_ss['limit_total_fraction']} = "
-                f"{_L_disp / _ss['limit_total_fraction']:.1f} mm"
-            )
-
-        # Results
-        col1, col2, col3 = st.columns(3)
-        col1.metric(f"Limit LL  (L/{_ss.get('limit_LL_fraction',360)})",
-                    f"{_ss['def_limit_ll_mm']:.1f} mm")
-        col2.metric(f"Limit total  (L/{_ss.get('limit_total_fraction',240)})",
-                    f"{_ss['def_limit_total_mm']:.1f} mm")
-        col3.metric("Actual total (long-term)",
-                    f"{_ss['def_total_longterm']:.1f} mm")
-
-        _stll3  = _ss["def_status_ll"]
-        _sttot3 = _ss["def_status_total"]
-        st.markdown(f"**LL status:** {_stll3}  |  **Total status:** {_sttot3}")
-        if _sttot3 == "NG":
+        col1.metric("Limit LL (L/360)",    f"{_ss['def_limit_ll_mm']:.1f} mm")
+        col2.metric("Limit total (L/240)", f"{_ss['def_limit_total_mm']:.1f} mm")
+        col3.metric("Actual total",         f"{_ss['def_total_longterm']:.1f} mm")
+        _stll2  = _ss["def_status_ll"]
+        _sttot2 = _ss["def_status_total"]
+        st.markdown(f"**LL status:** {_stll2}  |  **Total status:** {_sttot2}")
+        if _sttot2 == "NG":
             st.error("Total deflection exceeds code limit. Consider increasing depth or prestress.")
         else:
             st.success("Deflection within code limits.")
-
-        st.markdown("---")
-
-        # ── I.3b Thermal camber (FIX-4 Addition 2) ───────────────────────────
-        section_hdr("I.3b", "Thermal Camber (optional)")
-        _ss["has_thermal"] = st.checkbox(
-            "Include temperature differential camber?",
-            bool(_ss.get("has_thermal", False)), key="_has_thermal")
-        if _ss["has_thermal"]:
-            col1, col2 = st.columns(2)
-            with col1:
-                _ss["delta_T"] = st.number_input(
-                    "ΔT — Temperature differential top-to-bottom (°C)",
-                    -50.0, 50.0, float(_ss.get("delta_T", 0.0)), 0.5, key="_delta_T")
-                st.caption("Positive = top warmer than bottom → upward hogging camber")
-            with col2:
-                _ss["alpha_T"] = st.number_input(
-                    "α_T — Thermal expansion coefficient (per °C)",
-                    1e-6, 20e-6, float(_ss.get("alpha_T", 10e-6)),
-                    format="%.6f", step=1e-6, key="_alpha_T")
-                st.caption("Normal concrete: 10 × 10⁻⁶ /°C")
-
-            _dtherm = _ss.get("def_delta_thermal", 0.0)
-            st.markdown(
-                f"**Thermal camber formula:** δ_T = α_T × ΔT × L² / (8 × h)  "
-                f"= {_ss['alpha_T']:.2e} × {_ss['delta_T']:.1f} × {_ss['L_an']:.0f}² "
-                f"/ (8 × {_ss['h']:.0f}) = **{_dtherm:.3f} mm** "
-                f"({'upward ↑' if _dtherm >= 0 else 'downward ↓'})"
-            )
-        else:
-            _ss["delta_T"] = 0.0
-
-        st.markdown("---")
-
-    # ── I.4  Natural Frequency & Vibration (FIX-4 Addition 4) ────────────────
-    section_hdr("I.4", "Natural Frequency & Vibration Check")
-    st.caption(
-        "Ref: AISC Design Guide 11 (DG11)  |  ISO 10137:2007  "
-        "Simply-supported beam model."
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        _ss["vibration_mode"] = st.selectbox(
-            "Occupancy / vibration mode",
-            ["Walking / Occupancy", "Machine / Equipment", "Sensitive (Lab/Hospital)"],
-            index=["Walking / Occupancy", "Machine / Equipment",
-                   "Sensitive (Lab/Hospital)"].index(
-                       _ss.get("vibration_mode", "Walking / Occupancy")),
-            key="_vib_mode"
-        )
-    with col2:
-        _ss["damping_ratio"] = st.number_input(
-            "Damping ratio β (%)",
-            0.5, 20.0, float(_ss.get("damping_ratio", 3.0)), 0.5,
-            key="_damping_ratio",
-            help="Typical: 3% office, 5% partition walls, 2% bare concrete"
-        )
-
-    # Vibration results (computed by auto-calc via get_deflection_results)
-    _fn_val   = _ss.get("def_vib_fn",    0.0)
-    _fn_lim   = _ss.get("def_vib_fn_limit", 8.0)
-    _fn_ok    = _ss.get("def_vib_fn_ok", False)
-    _ag_val   = _ss.get("def_vib_ag",    0.0)
-    _ag_lim   = _ss.get("def_vib_ag_limit", 0.005)
-    _ag_ok    = _ss.get("def_vib_ag_ok", False)
-    _W_eff    = _ss.get("def_vib_W_eff", 0.0)
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "Natural Frequency f_n",
-        f"{_fn_val:.2f} Hz",
-        delta=f"≥ {_fn_lim:.1f} Hz required → {'OK' if _fn_ok else 'NG'}",
-        delta_color="normal" if _fn_ok else "inverse"
-    )
-    col2.metric(
-        "Peak acceleration a/g",
-        f"{_ag_val*100:.3f} %",
-        delta=f"≤ {_ag_lim*100:.1f}% limit → {'OK' if _ag_ok else 'NG'}",
-        delta_color="normal" if _ag_ok else "inverse"
-    )
-    col3.metric("Effective weight W_eff", f"{_W_eff:.1f} kN")
-
-    if not _fn_ok:
-        st.error(
-            f"⚠️ Natural frequency f_n = {_fn_val:.2f} Hz < {_fn_lim:.1f} Hz limit "
-            f"({_ss.get('vibration_mode','—')}). "
-            "Consider increasing section depth, composite action, or adding tuned mass damper."
-        )
-    if not _ag_ok:
-        st.warning(
-            f"⚠️ Peak acceleration a/g = {_ag_val*100:.3f}% > {_ag_lim*100:.2f}% limit. "
-            "Investigate damping or section stiffness."
-        )
-    if _fn_ok and _ag_ok:
-        st.success("Vibration check passed: f_n and a/g within limits.")
-
-    with st.expander("📐 Vibration Calculation Detail", expanded=False):
-        _L_m_vib = _ss.get("def_vib_L_m",    float(_ss.get("L_an", 5850)) / 1000)
-        _EI_vib  = _ss.get("def_vib_EI_SI",  0.0)
-        _m_vib   = _ss.get("def_vib_W_eff",  0.0) / 9.81 / _L_m_vib if _L_m_vib > 0 else 0.0
-        st.markdown(f"""
-**Formula:** f_n = (π² / (2L²)) × √(EI / m)  [AISC DG11]
-
-| Parameter | Value |
-|---|---|
-| Span L | {_L_m_vib:.3f} m |
-| EI (composite) | {_EI_vib:.3e} N·m² |
-| Mass/length m | {_m_vib:.2f} kg/m |
-| Effective weight W_eff | {_W_eff:.1f} kN |
-| Damping β | {_ss.get('damping_ratio', 3.0):.1f} % |
-| **f_n** | **{_fn_val:.3f} Hz** |
-| Limit f_n | {_fn_lim:.1f} Hz |
-| **a/g** | **{_ag_val*100:.4f}%** |
-| Limit a/g | {_ag_lim*100:.2f}% |
-
-**Peak acceleration:** a/g = P₀ × e^(−2πβ) / W_eff  
-P₀ = 0.29 kN (walking excitation, AISC DG11 Table 4.2)  
-**Ref:** AISC Design Guide 11 | ISO 10137:2007
-""")
 
 # =============================================================================
 # TAB J — Report
@@ -1444,7 +1218,7 @@ with tab_sum:
             "L_clear",          "L_an",
             "Prestress dev.",   "Flexure DCR_M",
             "Shear DCR_V",      "Stress checks",
-            "Deflection",       "Vibration f_n",
+            "Deflection",
         ],
         "Value": [
             "✅ OK" if _ok_geom else "❌ Fail",
@@ -1456,8 +1230,6 @@ with tab_sum:
             f"{_ss.get('cap_DCR_V', 999):.3f}  {'✅' if _ok_V2 else '❌'}",
             "✅ All OK" if _ok_str2 else "❌ Fail",
             f"{_ss.get('def_total_longterm', 0):.2f} mm  {'✅' if _ok_def2 else '❌'}",
-            f"{_ss.get('def_vib_fn', 0):.2f} Hz  "
-            f"{'✅' if _ss.get('def_vib_fn_ok', False) else '❌'}",
         ]
     })
     st.dataframe(_sum_df, use_container_width=True, hide_index=True)
