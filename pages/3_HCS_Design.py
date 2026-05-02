@@ -106,8 +106,10 @@ _ss["lb_ps_status"] = _dev["status"]
 _ss["lb_ps_is_ps"] = _dev["is_prestressed"]
 _ss["lb_ps_message"] = _dev["message"]
 _A_voids_total = _ss.get("A_voids_total", 63959.0)
-_SW_HCS = _ss.get("SW_HCS", _ss["wc"] * (_ss["b_bottom"] * _ss["h"] - _A_voids_total) / (_ss["b_bottom"] * 1e6))
-_SW_topping = _ss.get("SW_topping", _ss["wc_top"] * _ss["b_nominal"] * _ss["t_topping"] / (_ss["b_nominal"] * 1e6) if _ss["has_topping"] else 0.0)
+_A_conc_mm2 = _ss["b_bottom"] * _ss["h"] - _A_voids_total   # mm²
+_SW_HCS = _ss.get("SW_HCS", _ss["wc"] * (_A_conc_mm2 / _ss["b_bottom"]) / 1e6)
+# Untuk HCS200: 24 × (1199×200 - 63959) / 1199 / 1e6 ≈ 3.52 kN/m²
+_SW_topping = _ss.get("SW_topping", _ss["wc_top"] * _ss["t_topping"] / 1000.0 if _ss["has_topping"] else 0.0)
 _ld = calc_factored_loads_and_diagrams(
     L_an=_L_an, b_bottom=_ss["b_bottom"], t_topping=_ss["t_topping"],
     wc=_ss["wc"], wc_top=_ss["wc_top"], has_topping=_ss["has_topping"],
