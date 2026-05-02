@@ -249,11 +249,70 @@ def _build_sfd_bmd_fig(ss: dict):
 
 
 def _fig_to_png(fig) -> bytes | None:
-    """Export Plotly figure to PNG bytes in-memory — zero disk I/O."""
+    """
+    Export Plotly figure to PNG bytes in-memory.
+    Primary: kaleido via pio.to_image().
+    Fallback: matplotlib SFD/BMD reconstruction if kaleido fails.
+    """
     if fig is None or not HAS_PLOTLY:
         return None
+    # ── Primary: kaleido ──────────────────────────────────────────────────
     try:
+        import kaleido  # noqa: F401
         return pio.to_image(fig, format="png", width=780, height=500, scale=2)
+    except Exception:
+        pass
+    # ── Fallback: matplotlib simple SFD/BMD ───────────────────────────────
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        # Extract data from Plotly figure traces
+        x_data, vu_data, mu_data = [], [], []
+        for trace in fig.data:
+            if hasattr(trace, "x") and trace.x is not None and len(trace.x) > 1:
+                if "Vu" in (trace.name or "") or "Vs" in (trace.name or ""):
+                    x_data = list(trace.x)
+                    vu_data = list(trace.y)
+                elif "Mu" in (trace.name or "") or "Ms" in (trace.name or ""):
+                    mu_data = list(trace.y)
+
+        fig_mpl, (ax1, ax2) = plt.subplots(2, 1, figsize=(9.5, 6),
+                                             facecolor="white", sharex=True)
+        fig_mpl.subplots_adjust(hspace=0.35)
+
+        if x_data and vu_data:
+            ax1.plot(x_data, vu_data, color="#1A476F", linewidth=2, label="Vu factored")
+            ax1.axhline(0, color="black", linewidth=0.6)
+            ax1.fill_between(x_data, vu_data, alpha=0.08, color="#1A476F")
+        ax1.set_ylabel("Shear (kN)", fontsize=9)
+        ax1.set_title("Shear Force Diagram  (kN)", fontsize=10, fontweight="bold")
+        ax1.grid(True, linestyle="--", alpha=0.4)
+        ax1.legend(fontsize=8)
+
+        if x_data and mu_data:
+            ax2.plot(x_data, mu_data, color="#1A476F", linewidth=2, label="Mu factored")
+            ax2.axhline(0, color="black", linewidth=0.6)
+            ax2.fill_between(x_data, mu_data, alpha=0.08, color="#1A476F")
+        ax2.set_xlabel("Distance from left support (m)", fontsize=9)
+        ax2.set_ylabel("Moment (kN·m)", fontsize=9)
+        ax2.set_title("Bending Moment Diagram  (kN·m)", fontsize=10, fontweight="bold")
+        ax2.grid(True, linestyle="--", alpha=0.4)
+        ax2.legend(fontsize=8)
+
+        note = mpatches.Patch(color="none",
+                              label="[Diagram rendered via matplotlib fallback]")
+        fig_mpl.legend(handles=[note], loc="lower center",
+                       fontsize=7, framealpha=0)
+
+        buf = io.BytesIO()
+        fig_mpl.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                        facecolor="white")
+        plt.close(fig_mpl)
+        buf.seek(0)
+        return buf.read()
     except Exception:
         return None
 
