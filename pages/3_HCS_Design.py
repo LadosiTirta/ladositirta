@@ -1030,6 +1030,9 @@ with tab_F:
 # TAB G — Stress Checks
 # =============================================================================
 with tab_G:
+    st.markdown("## G · Stress Checks")
+    st.caption("Ref: ACI/PCI 319-25 Table 24.5.3.1 | Sign: compression (−), tension (+)")
+
     # ── Construction Stage Shoring ────────────────────────────────────────
     st.markdown("---")
     section_hdr("G.0", "Construction Stage — Topping Pour Support")
@@ -1116,7 +1119,6 @@ with tab_G:
             st.error("Stress check FAILED. Adjust section or prestress level.")
         else:
             st.success("All stress checks passed.")
-
 # =============================================================================
 # TAB H — Capacity
 # =============================================================================
