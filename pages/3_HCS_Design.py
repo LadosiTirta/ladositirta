@@ -12,6 +12,7 @@
 #           vibration / natural frequency check (AISC DG11 / ISO 10137)
 #   FIX-5: Timezone offset, Assumed loss input, Shoring input (multiple supports),
 #           SFD/BMD fix, combined with all features of arsip4
+#   FIX-6: Fix StreamlitValueBelowMinError in Construction Stage shoring inputs
 # =============================================================================
 
 import streamlit as st
@@ -929,7 +930,7 @@ with tab_D:
         st.plotly_chart(_fig2, use_container_width=True)
 
 # =============================================================================
-# TAB E — Seismic  (FIX-3 Addition 4: ACI/PCI 319-25 Sec. 12 detail)
+# TAB E — Seismic
 # =============================================================================
 with tab_E:
     section_hdr("E.1", "Seismic Design Category")
@@ -977,7 +978,6 @@ with tab_E:
         st.success(f"SDC {_ss['sdc']}: Standard provisions apply (ACI/PCI 319-25).")
 
     st.markdown("---")
-
     section_hdr("E.2", "Structural Integrity Ties")
     st.markdown("""
 **Structural Integrity Ties per ACI/PCI CODE-319-25 Sec. 16.5:**
@@ -1046,10 +1046,14 @@ with tab_G:
     if _ss["has_construction_shoring"]:
         col1, col2 = st.columns(2)
         with col1:
-            # FIX: Ensure minimum value is 1 to prevent StreamlitValueBelowMinError
+            # FIX: ensure n_support value is at least 1 before passing to number_input
+            _n_support_val = int(_ss.get("n_support", 1))
+            if _n_support_val < 1:
+                _n_support_val = 1
+                _ss["n_support"] = 1
             _ss["n_support"] = st.number_input(
                 "Number of temporary supports",
-                1, 10, max(1, int(_ss.get("n_support", 1))), 1,
+                1, 10, _n_support_val, 1,
                 help="Supports placed between the main bearings."
             )
         with col2:
@@ -1060,14 +1064,19 @@ with tab_G:
                 _ss["dist_support_right"] = L_available / 2.0
                 st.markdown(f"**Auto midspan:** distance = {_ss['dist_support_left']:.0f} mm from each end")
             else:
+                # FIX: clamp default values to valid range
+                _dist_left_val = int(_ss.get("dist_support_left", 1000))
+                _dist_left_val = max(0, min(_dist_left_val, int(L_available)))
+                _dist_right_val = int(_ss.get("dist_support_right", 1000))
+                _dist_right_val = max(0, min(_dist_right_val, int(L_available)))
                 _ss["dist_support_left"] = st.number_input(
                     "Distance from left edge to first support (mm)",
-                    0, int(L_available), int(_ss.get("dist_support_left", 1000)), 100,
+                    0, int(L_available), _dist_left_val, 100,
                     key="_dist_support_left"
                 )
                 _ss["dist_support_right"] = st.number_input(
                     "Distance from right edge to last support (mm)",
-                    0, int(L_available), int(_ss.get("dist_support_right", 1000)), 100,
+                    0, int(L_available), _dist_right_val, 100,
                     key="_dist_support_right"
                 )
 
@@ -1122,6 +1131,7 @@ with tab_G:
             st.error("Stress check FAILED. Adjust section or prestress level.")
         else:
             st.success("All stress checks passed.")
+
 # =============================================================================
 # TAB H — Capacity
 # =============================================================================
@@ -1163,7 +1173,7 @@ with tab_H:
             st.plotly_chart(_fig3, use_container_width=True)
 
 # =============================================================================
-# TAB I — Deflection & Camber  (FIX-4 Enhanced)
+# TAB I — Deflection & Camber
 # =============================================================================
 with tab_I:
     st.markdown("## I · Deflection & Camber")
@@ -1173,7 +1183,6 @@ with tab_I:
     )
 
     # ── I.0  PCI Multipliers (editable) ──────────────────────────────────────
-    from hcs.deflection import get_pci_multiplier_defaults
     _has_top_defl = _ss.get("has_topping", False)
     _pci_def = get_pci_multiplier_defaults(_has_top_defl)
 
@@ -1323,7 +1332,7 @@ with tab_I:
 
         st.markdown("---")
 
-        # ── I.3b Thermal camber (FIX-4 Addition 2) ───────────────────────────
+        # ── I.3b Thermal camber ───────────────────────────────────────────
         section_hdr("I.3b", "Thermal Camber (optional)")
         _ss["has_thermal"] = st.checkbox(
             "Include temperature differential camber?",
@@ -1354,7 +1363,7 @@ with tab_I:
 
         st.markdown("---")
 
-    # ── I.4  Natural Frequency & Vibration (FIX-4 Addition 4) ────────────────
+    # ── I.4  Natural Frequency & Vibration ────────────────────────────────
     section_hdr("I.4", "Natural Frequency & Vibration Check")
     st.caption(
         "Ref: AISC Design Guide 11 (DG11)  |  ISO 10137:2007  "
@@ -1379,7 +1388,6 @@ with tab_I:
             help="Typical: 3% office, 5% partition walls, 2% bare concrete"
         )
 
-    # Vibration results (computed by auto-calc via get_deflection_results)
     _fn_val   = _ss.get("def_vib_fn",    0.0)
     _fn_lim   = _ss.get("def_vib_fn_limit", 8.0)
     _fn_ok    = _ss.get("def_vib_fn_ok", False)
