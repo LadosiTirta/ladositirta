@@ -501,7 +501,7 @@ class _DocxReport:
             ("Project",   "HCS Design — Automatically generated report"),
             ("Code ref.", "ACI/PCI CODE-319-25  |  PCI Design Handbook, 8th Edition"),
             ("Units",     "mm · kN · MPa  (SI only, no conversions)"),
-            ("Date",      _g(ss, "report_datetime", datetime.now().strftime("%d %B %Y   %H:%M")),
+            ("Date",      datetime.now().strftime("%d %B %Y   %H:%M")),
             ("Software",  "HCS Design App v1.0  (Streamlit Cloud)"),
         ])
         self._note(
