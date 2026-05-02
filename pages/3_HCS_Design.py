@@ -1030,28 +1030,66 @@ with tab_F:
 # TAB G — Stress Checks
 # =============================================================================
 with tab_G:
-    st.markdown("## G · Stress Checks")
-    st.caption("Ref: ACI/PCI 319-25 Table 24.5.3.1 | Sign: compression (−), tension (+)")
-
-    # Shoring input for construction stage
+    # ── Construction Stage Shoring ────────────────────────────────────────
     st.markdown("---")
     section_hdr("G.0", "Construction Stage — Topping Pour Support")
     _ss["has_construction_shoring"] = st.checkbox(
         "Temporary shoring during topping pour?",
         value=_ss.get("has_construction_shoring", False),
-        help="If checked, the span can be reduced to the shored distance."
+        help="If checked, the span can be reduced by intermediate supports."
     )
     if _ss["has_construction_shoring"]:
-        _ss["L_shored"] = st.number_input(
-            "Shored span length L_shored (mm)",
-            500, int(_ss["L_an"]), int(_ss.get("L_shored", 3000)), 100,
-            help="Distance between temporary supports. Moments during wet topping will be computed for this span."
+        col1, col2 = st.columns(2)
+        with col1:
+            _ss["n_support"] = st.number_input(
+                "Number of temporary supports",
+                1, 10, int(_ss.get("n_support", 1)), 1,
+                help="Supports placed between the main bearings."
+            )
+        with col2:
+            L_available = float(_ss.get("L_clear", 5700))
+            if _ss["n_support"] == 1:
+                # Auto mid-span
+                _ss["dist_support_left"] = L_available / 2.0
+                _ss["dist_support_right"] = L_available / 2.0
+                st.markdown(f"**Auto midspan:** distance = {_ss['dist_support_left']:.0f} mm from each end")
+            else:
+                _ss["dist_support_left"] = st.number_input(
+                    "Distance from left edge to first support (mm)",
+                    0, int(L_available), int(_ss.get("dist_support_left", 1000)), 100,
+                    key="_dist_support_left"
+                )
+                _ss["dist_support_right"] = st.number_input(
+                    "Distance from right edge to last support (mm)",
+                    0, int(L_available), int(_ss.get("dist_support_right", 1000)), 100,
+                    key="_dist_support_right"
+                )
+
+        # Calculate effective span for worst-case moment during topping
+        if _ss["n_support"] == 1:
+            # Single support at midspan -> two equal spans
+            _ss["L_shored"] = _ss["dist_support_left"]  # = L_clear/2
+        else:
+            # Multiple supports: effective span = maximum clear distance between supports
+            # Simplified: (L_clear - sum of edge distances) / (n_support - 1)
+            if _ss["n_support"] > 1:
+                interior_spacing = (L_available - _ss["dist_support_left"] - _ss["dist_support_right"]) / (_ss["n_support"] - 1)
+                _ss["L_shored"] = max(_ss["dist_support_left"], _ss["dist_support_right"], interior_spacing)
+            else:
+                _ss["L_shored"] = L_available  # fallback
+
+        st.caption(
+            f"Effective span for construction stage = **{_ss['L_shored']:.0f} mm** "
+            "(used to compute moments from wet topping weight)."
         )
-        st.caption("Note: This value must be used in the stress_check module (hcs.stress_check) "
-                   "to recalculate M_dl for the construction stage with the reduced span.")
+        st.info(
+            "The construction stage moments are recalculated using this reduced span.\n"
+            "Make sure your stress‑check module reads `L_shored` from session state."
+        )
     else:
-        _ss["L_shored"] = _ss["L_an"]
-        st.info("No shoring → full span used for construction stress checks.")
+        _ss["L_shored"] = float(_ss["L_an"])
+        _ss["n_support"] = 0
+        st.info("No temporary supports → full span used for construction stress checks.")
 
     st.markdown("---")
     if "sc_transfer" not in _ss:
