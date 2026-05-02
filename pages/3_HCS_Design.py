@@ -80,9 +80,15 @@ def init_session_state():
         "b_bear_L": 150, "b_bear_R": 150,
         "L_clear": 5700.0, "L_an": 5850.0, "bear_min": 50.8,
         "span_type": "Clear span",
-        # Construction shoring
+      
+        # ═══ TAMBAHKAN DI SINI ═══
         "has_construction_shoring": False,
-        "L_shored": 3000,            # mm — span between temporary supports
+        "n_support": 1,
+        "dist_support_left": 0.0,
+        "dist_support_right": 0.0,
+        "L_shored": 3000,
+        # ═══ AKHIR TAMBAHAN ═══
+      
         # Loads — area
         "SDL": 1.5, "LL": 2.0,
         # Load factors (FIX-3: per-load)
