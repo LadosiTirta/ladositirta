@@ -8,8 +8,6 @@
 #   FIX-2: Tab reorder, preset guard, beam width for span, line loads
 #   FIX-3: Custom LF per load, line load with position, seismic detail,
 #           UI fully in English, SW_HCS root-cause fixed (always recalc)
-#   FIX-4: Line load x_line_end crash fix, SW_HCS /1000 statt /1e6
-#           Half slab core input confirmed, shoring input added
 # =============================================================================
 
 import streamlit as st
@@ -80,9 +78,6 @@ def init_session_state():
         "b_bear_L": 150, "b_bear_R": 150,
         "L_clear": 5700.0, "L_an": 5850.0, "bear_min": 50.8,
         "span_type": "Clear span",
-        # Construction shoring
-        "has_construction_shoring": False,
-        "L_shored": 3000,            # mm — span between temporary supports
         # Loads — area
         "SDL": 1.5, "LL": 2.0,
         # Load factors (FIX-3: per-load)
@@ -146,18 +141,17 @@ def section_hdr(code, title):
 
 def calc_SW_HCS(wc, b_bottom, h, A_voids_total, hcs_type):
     """
-    SW_HCS [kN/m²] = wc [kN/m³] × (A_conc [mm²] / b_bottom [mm]) / 1000
-    Example HCS200: 24 × ((1199×200 - 63959) / 1199) / 1000 ≈ 3.52 kN/m²
-    FIX: divide by 1000, not 1e6.
+    SW_HCS [kN/m²] = wc [kN/m3] x A_conc [mm2] / b_bottom [mm] / 1e6
+    HCS200 example: 24 x (1199x200-63959) / 1199 / 1e6 = 3.52 kN/m2
+    Half Slab = HCS with tf_top=0 — cores still present, subtract A_voids.
+    Both types: A_conc = b_bottom * h - A_voids_total
     """
     A_conc = float(b_bottom) * float(h) - float(A_voids_total)
-    A_conc = max(A_conc, 0.0)
-    # wc kN/m³, A_conc/b_bottom yields mm of equivalent solid thickness
-    # /1000 converts mm→m ⇒ kN/m²
-    return float(wc) * (A_conc / float(b_bottom)) / 1000.0
+    A_conc = max(A_conc, 0.0)   # guard against negative (invalid geometry)
+    return float(wc) * (A_conc / float(b_bottom)) / 1e6
 
 def calc_SW_topping(wc_top, t_topping, has_topping):
-    """SW_topping [kN/m²] = wc_top [kN/m³] × t_topping [mm] / 1000"""
+    """SW_topping [kN/m²] = wc_top [kN/m3] x t_topping [mm] / 1000"""
     if has_topping and t_topping > 0:
         return float(wc_top) * float(t_topping) / 1000.0
     return 0.0
@@ -531,9 +525,9 @@ with tab_A:
         {metric_card("SW_total (live)",  f"{_sw_prev + _swtprev:.3f}", "kN/m²")}
         </div>""", unsafe_allow_html=True)
     st.caption(
-        f"SW_HCS = wc × (b×h − A_voids) / b / 1000 "
+        f"SW_HCS = wc × (b×h − A_voids) / b / 1e6 "
         f"= {_ss['wc']} × ({_ss['b_bottom']}×{_ss['h']} − {_A_voids_total:.0f}) "
-        f"/ {_ss['b_bottom']} / 1000 = **{_sw_prev:.3f} kN/m²**"
+        f"/ {_ss['b_bottom']} / 1e6 = **{_sw_prev:.3f} kN/m²**"
     )
 
 # =============================================================================
@@ -742,9 +736,9 @@ with tab_D:
         {metric_card("SW_total",   f"{_ss['SW_HCS']+_ss['SW_topping']:.3f}", "kN/m²")}
         </div>""", unsafe_allow_html=True)
     st.caption(
-        f"SW_HCS = wc × (b×h − A_voids) / b / 1000 = "
+        f"SW_HCS = wc × (b×h − A_voids) / b / 1e6 = "
         f"{_ss['wc']} × ({_ss['b_bottom']}×{_ss['h']} − {_A_voids_total:.0f}) "
-        f"/ {_ss['b_bottom']} / 1000 = **{_ss['SW_HCS']:.3f} kN/m²**"
+        f"/ {_ss['b_bottom']} / 1e6 = **{_ss['SW_HCS']:.3f} kN/m²**"
     )
     st.markdown("---")
 
@@ -1032,28 +1026,6 @@ with tab_F:
 with tab_G:
     st.markdown("## G · Stress Checks")
     st.caption("Ref: ACI/PCI 319-25 Table 24.5.3.1 | Sign: compression (−), tension (+)")
-
-    # Shoring input for construction stage
-    st.markdown("---")
-    section_hdr("G.0", "Construction Stage — Topping Pour Support")
-    _ss["has_construction_shoring"] = st.checkbox(
-        "Temporary shoring during topping pour?",
-        value=_ss.get("has_construction_shoring", False),
-        help="If checked, the span can be reduced to the shored distance."
-    )
-    if _ss["has_construction_shoring"]:
-        _ss["L_shored"] = st.number_input(
-            "Shored span length L_shored (mm)",
-            500, int(_ss["L_an"]), int(_ss.get("L_shored", 3000)), 100,
-            help="Distance between temporary supports. Moments during wet topping will be computed for this span."
-        )
-        st.caption("Note: This value must be used in the stress_check module (hcs.stress_check) "
-                   "to recalculate M_dl for the construction stage with the reduced span.")
-    else:
-        _ss["L_shored"] = _ss["L_an"]
-        st.info("No shoring → full span used for construction stress checks.")
-
-    st.markdown("---")
     if "sc_transfer" not in _ss:
         st.info("Calculating stress checks...")
     else:
