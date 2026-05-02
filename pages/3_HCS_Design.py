@@ -928,4 +928,537 @@ with tab_D:
         _fig2.update_xaxes(title_text="x (m)", row=2, col=1)
         st.plotly_chart(_fig2, use_container_width=True)
 
-# ... (E, F, G, H, I, J, Summary tabs di bawah, semua sudah mencakup fitur yang diminta)
+# =============================================================================
+# TAB E — Seismic  (FIX-3 Addition 4: ACI/PCI 319-25 Sec. 12 detail)
+# =============================================================================
+with tab_E:
+    section_hdr("E.1", "Seismic Design Category")
+    _sdc_opts = ["A", "B", "C", "D", "E", "F"]
+    _ss["sdc"] = st.selectbox("SDC", _sdc_opts, index=_sdc_opts.index(_ss["sdc"]), key="_sdc")
+
+    if _ss["sdc"] in ["D", "E", "F"]:
+        st.error(f"SDC {_ss['sdc']}: Special detailing required. "
+                 "Untopped HCS diaphragm flexibility MUST be explicitly modelled. "
+                 "See ACI/PCI 319-25 Chapter 12.")
+        with st.expander("📋 ACI/PCI 319-25 Chapter 12 — Diaphragm Requirements (SDC D/E/F)",
+                          expanded=True):
+            st.markdown("""
+**ACI/PCI CODE-319-25 Chapter 12 — Key Requirements for SDC D, E, and F:**
+
+- **Sec. 12.3 — Diaphragm Flexibility:**
+  Untopped HCS diaphragm flexibility must be **explicitly modelled** in the structural
+  analysis. The rigid diaphragm assumption is **NOT permitted** for untopped HCS in SDC D/E/F.
+
+- **Sec. 12.4.2 — Minimum Connection Force:**
+  Minimum connection force = **0.04 × (floor dead load)** transferred as in-plane shear
+  to the lateral force-resisting system. This must be verified for all connections.
+
+- **Sec. 12.5 — Chord and Collector Design:**
+  Chord and collector elements are required at **all diaphragm edges** and re-entrant
+  corners. Reinforcement must be detailed to develop the required tension/compression.
+
+- **Sec. 12.6 — Grouted Joint Shear:**
+  Shear capacity of grouted longitudinal joints shall not exceed **0.55 MPa**
+  (≈ 80 psi) per unit area of joint. Additional shear ties may be required.
+
+- **ACI CODE-550.5:**
+  Connection validation by **physical testing** is required for SDC D/E/F untopped HCS.
+  Reliance on calculation alone is not permitted without test data.
+
+- **Reference:** ACI/PCI CODE-319-25 Chapter 12 | ACI CODE-550.5 |
+  PCI Design Handbook 8th Ed. Sec. 3.4
+
+> ⚠️ **Engineer of record must verify all diaphragm assumptions.**
+""")
+    elif _ss["sdc"] == "C":
+        st.warning("SDC C: Intermediate seismic requirements apply. "
+                   "Check ACI/PCI 319-25 Chapter 12 for applicable provisions.")
+    else:
+        st.success(f"SDC {_ss['sdc']}: Standard provisions apply (ACI/PCI 319-25).")
+
+    st.markdown("---")
+
+    section_hdr("E.2", "Structural Integrity Ties")
+    st.markdown("""
+**Structural Integrity Ties per ACI/PCI CODE-319-25 Sec. 16.5:**
+
+These tie requirements apply to **ALL SDC categories**:
+
+| Tie Type | Minimum Requirement |
+|---|---|
+| **Longitudinal ties** | ≥ 0.9 kN per metre of floor width |
+| **Transverse ties** | ≥ 0.9 kN per metre of floor length |
+| **Peripheral ties** | ≥ 70 kN total force (around floor perimeter) |
+
+> **Ref: ACI/PCI CODE-319-25 Sec. 16.5**
+>
+> Connections between HCS units and supporting members must be designed and detailed
+> to transfer these forces under gravity and lateral load combinations.
+""")
+
+# =============================================================================
+# TAB F — Section Properties
+# =============================================================================
+with tab_F:
+    st.markdown("## F · Section Properties")
+    st.caption("Ref: ACI/PCI 319-25 Cl. 26.12 | Full step-by-step in Report")
+    section_hdr("F.1", "Gross Section")
+    st.markdown(
+        f"""<div class="metric-grid">
+        {metric_card("Ag",   f"{_ss.get('sp_Ag',0):,.0f}",     "mm²")}
+        {metric_card("yb_g", f"{_ss.get('sp_yb_g',0):.1f}",    "mm")}
+        {metric_card("Ig",   f"{_ss.get('sp_Ig',0)/1e6:.3f}",  "×10⁶ mm⁴")}
+        </div>""", unsafe_allow_html=True)
+    section_hdr("F.2", "Net HCS Section")
+    st.markdown(
+        f"""<div class="metric-grid">
+        {metric_card("An",    f"{_ss.get('sp_An',0):,.0f}",    "mm²")}
+        {metric_card("yb",    f"{_ss.get('sp_yb',0):.2f}",     "mm")}
+        {metric_card("In",    f"{_ss.get('sp_In',0)/1e6:.3f}", "×10⁶ mm⁴")}
+        {metric_card("e_bot", f"{_ss.get('sp_e_bot',0):.2f}",  "mm")}
+        </div>""", unsafe_allow_html=True)
+    section_hdr("F.3", "Composite Section")
+    if _ss.get("has_topping") and _ss.get("t_topping", 0) > 0:
+        st.markdown(
+            f"""<div class="metric-grid">
+            {metric_card("A_comp",  f"{_ss.get('sp_A_comp',0):,.0f}",    "mm²")}
+            {metric_card("yb_comp", f"{_ss.get('sp_yb_comp',0):.2f}",    "mm")}
+            {metric_card("I_comp",  f"{_ss.get('sp_I_comp',0)/1e6:.3f}", "×10⁶ mm⁴")}
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.info("No topping → composite section = net HCS section.")
+
+# =============================================================================
+# TAB G — Stress Checks
+# =============================================================================
+with tab_G:
+    st.markdown("## G · Stress Checks")
+    st.caption("Ref: ACI/PCI 319-25 Table 24.5.3.1 | Sign: compression (−), tension (+)")
+    if "sc_transfer" not in _ss:
+        st.info("Calculating stress checks...")
+    else:
+        for _skey, _stitle in [
+            ("sc_transfer",    "Transfer / Release"),
+            ("sc_lifting",     "Lifting (after ES)"),
+            ("sc_construction","Construction (wet topping, non-composite)"),
+            ("sc_service",     f"Service (composite, class {_ss.get('sc_service_class','T')})"),
+        ]:
+            _sd = _ss.get(_skey, {})
+            if not _sd:
+                continue
+            st.markdown(f"### {_stitle}")
+            col1, col2 = st.columns(2)
+            col1.metric("Top fiber",    f"{_sd.get('f_top',0):.2f} MPa")
+            col2.metric("Bottom fiber", f"{_sd.get('f_bot',0):.2f} MPa")
+            st.caption(f"Limit comp: {_sd.get('limit_comp',0):.1f} MPa  |  "
+                       f"Limit tens: {_sd.get('limit_tens',0):.2f} MPa  |  "
+                       f"Status: **{_sd.get('status','—')}**")
+        _svsv = _ss.get("sc_service", {})
+        if _svsv.get("status") == "NG":
+            st.error("Stress check FAILED. Adjust section or prestress level.")
+        else:
+            st.success("All stress checks passed.")
+
+# =============================================================================
+# TAB H — Capacity
+# =============================================================================
+with tab_H:
+    st.markdown("## H · Flexural & Shear Capacity")
+    st.caption("Ref: ACI/PCI 319-25 Cl. 22.2, 22.5, 22.6")
+    if "cap_phi_Mn" not in _ss:
+        st.info("Calculating capacity...")
+    else:
+        st.markdown("### Flexural Capacity")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("fps",  f"{_ss['cap_fps']:.1f} MPa")
+        col2.metric("Mn",   f"{_ss['cap_Mn']:.1f} kN·m")
+        col3.metric("φMn",  f"{_ss['cap_phi_Mn']:.1f} kN·m")
+        st.caption(f"Compression block depth a = {_ss['cap_a']:.1f} mm")
+        _DCR_M = _ss["cap_DCR_M"]
+        st.metric("DCR_M (Mu/φMn)", f"{_DCR_M:.3f}",
+                  delta="OK" if _DCR_M <= 1.0 else "OVERSTRESS",
+                  delta_color="normal" if _DCR_M <= 1.0 else "inverse")
+
+        st.markdown("### Shear Capacity")
+        col1, col2 = st.columns(2)
+        col1.metric("min φVn", f"{_ss['cap_phi_Vn_min']:.1f} kN")
+        col2.metric("DCR_V",   f"{_ss['cap_DCR_V']:.3f}")
+        if _ss["cap_needs_Av_min"]:
+            st.warning("⚠️ h > 317 mm, no topping, Vu > 0.5φVcw → Av,min required per ACI/PCI 319-25 Cl. 9.6.3.")
+        else:
+            st.info("No minimum shear reinforcement required per ACI/PCI 319-25.")
+        if "cap_phi_Vn_arr" in _ss and len(_ss["cap_phi_Vn_arr"]) > 0:
+            _xm3 = _ss["lb_x_arr"] / 1000.0
+            _fig3 = go.Figure()
+            _fig3.add_trace(go.Scatter(x=_xm3, y=_ss["cap_phi_Vn_arr"],
+                                       name="φVn (capacity)", line=dict(color="green", width=2)))
+            _fig3.add_trace(go.Scatter(x=_xm3, y=abs(_ss["lb_Vu_arr"]),
+                                       name="|Vu| (demand)", line=dict(color="red", width=2, dash="dash")))
+            _fig3.update_layout(title="Shear Capacity vs. Demand Along Span",
+                                xaxis_title="Distance from left support (m)",
+                                yaxis_title="Shear (kN)", height=380)
+            st.plotly_chart(_fig3, use_container_width=True)
+
+# =============================================================================
+# TAB I — Deflection & Camber  (FIX-4 Enhanced)
+# =============================================================================
+with tab_I:
+    st.markdown("## I · Deflection & Camber")
+    st.caption(
+        "Ref: PCI Design Handbook 8th Ed. Sec. 4.8 & Table 4.8.3  |  "
+        "ACI 318-19 Table 24.2.2  |  AISC DG11 (Vibration)"
+    )
+
+    # ── I.0  PCI Multipliers (editable) ──────────────────────────────────────
+    from hcs.deflection import get_pci_multiplier_defaults
+    _has_top_defl = _ss.get("has_topping", False)
+    _pci_def = get_pci_multiplier_defaults(_has_top_defl)
+
+    with st.expander("⚙️ PCI Long-Term Multipliers (editable)", expanded=False):
+        st.caption(
+            "Defaults: PCI Design Handbook 8th Ed. Table 4.8.3. "
+            "Modify only with engineering judgment."
+        )
+        _top_label = "WITH topping" if _has_top_defl else "WITHOUT topping"
+        st.markdown(f"**{_top_label}** — currently active defaults:")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            _ss["mult_camber_erection"] = st.number_input(
+                "Camber at erection (×)",
+                0.5, 5.0, float(_ss.get("mult_camber_erection", _pci_def["mult_camber_erection"])),
+                0.05, key="_mult_camber_erect")
+            _ss["mult_dw_erection"] = st.number_input(
+                "SW defl at erection (×)",
+                0.5, 5.0, float(_ss.get("mult_dw_erection", _pci_def["mult_dw_erection"])),
+                0.05, key="_mult_dw_erect")
+        with col2:
+            _ss["mult_camber_final"] = st.number_input(
+                "Final camber (×)",
+                0.5, 5.0, float(_ss.get("mult_camber_final", _pci_def["mult_camber_final"])),
+                0.05, key="_mult_camber_final")
+            _ss["mult_dw_final"] = st.number_input(
+                "Final SW deflection (×)",
+                0.5, 5.0, float(_ss.get("mult_dw_final", _pci_def["mult_dw_final"])),
+                0.05, key="_mult_dw_final")
+        with col3:
+            _ss["mult_sdl_final"] = st.number_input(
+                "Final SDL deflection (×)",
+                0.5, 5.0, float(_ss.get("mult_sdl_final", _pci_def["mult_sdl_final"])),
+                0.05, key="_mult_sdl_final")
+            _ss["mult_ll_final"] = st.number_input(
+                "LL deflection factor (×)",
+                0.5, 2.0, float(_ss.get("mult_ll_final", _pci_def["mult_ll_final"])),
+                0.05, key="_mult_ll_final")
+
+        if st.button("🔄 Reset to PCI Defaults", key="_reset_pci_mult"):
+            for _mk, _mv in _pci_def.items():
+                _ss[_mk] = _mv
+            st.rerun()
+
+        st.markdown(
+            "| Stage | Camber | SW defl | SDL | LL |\n"
+            "|---|---|---|---|---|\n"
+            f"| At erection | ×{_ss.get('mult_camber_erection',1.85):.2f} | "
+            f"×{_ss.get('mult_dw_erection',1.85):.2f} | — | — |\n"
+            f"| Final | ×{_ss.get('mult_camber_final',2.70):.2f} | "
+            f"×{_ss.get('mult_dw_final',2.40):.2f} | "
+            f"×{_ss.get('mult_sdl_final',3.00):.2f} | "
+            f"×{_ss.get('mult_ll_final',1.00):.2f} |"
+        )
+
+    st.markdown("---")
+
+    # ── I.1  Instantaneous results ────────────────────────────────────────────
+    section_hdr("I.1", "Instantaneous Deflection at Release")
+    if "def_delta_ps_initial" not in _ss:
+        st.info("Calculating deflections...")
+    else:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Prestress camber",      f"{_ss['def_delta_ps_initial']:+.2f} mm  ↑")
+        col2.metric("Self-weight defl.",     f"{_ss['def_delta_sw']:+.2f} mm  ↓")
+        col3.metric("Net at release",        f"{_ss['def_net_release']:+.2f} mm")
+        st.caption(
+            "Sign: (+) = upward camber, (−) = downward deflection. "
+            "e = eccentricity of PS centroid below section NA."
+        )
+
+        st.markdown("---")
+        section_hdr("I.2", "Long-term Deflection (Final Stage)")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Final camber",
+                    f"{_ss.get('def_final_camber', _ss['def_delta_ps_initial']*2.0):+.2f} mm")
+        col2.metric("Final SW defl.",
+                    f"{_ss.get('def_final_sw', _ss['def_delta_sw']*2.0):+.2f} mm")
+        col3.metric("Final SDL defl.",
+                    f"{_ss.get('def_final_sdl', _ss['def_delta_sdl']*3.0):+.2f} mm")
+        col4.metric("LL defl. (instantaneous)",
+                    f"{_ss.get('def_final_ll', _ss['def_delta_ll']):+.2f} mm")
+        st.metric("Total net long-term deflection", f"{_ss['def_total_longterm']:+.2f} mm")
+
+        st.markdown("---")
+        section_hdr("I.3", "Code Limit Checks")
+
+        # ── Editable deflection limits ─────────────────────────────────────
+        with st.expander("⚙️ Deflection Limits (editable)", expanded=False):
+            _struct_opts = [
+                "Office floor (L/360 LL, L/240 total)",
+                "Warehouse / Factory (L/240 LL, L/180 total)",
+                "Roof (L/240 LL, L/180 total)",
+                "Custom",
+            ]
+            _struct_presets = {
+                "Office floor (L/360 LL, L/240 total)":          (360, 240),
+                "Warehouse / Factory (L/240 LL, L/180 total)":   (240, 180),
+                "Roof (L/240 LL, L/180 total)":                   (240, 180),
+                "Custom":                                          (None, None),
+            }
+            _ss["defl_structure_type"] = st.selectbox(
+                "Structure type", _struct_opts,
+                index=_struct_opts.index(_ss.get("defl_structure_type", _struct_opts[0])),
+                key="_defl_struct_type")
+
+            _preset_lls, _preset_tot = _struct_presets[_ss["defl_structure_type"]]
+            if _preset_lls is not None:
+                _ss["limit_LL_fraction"]    = _preset_lls
+                _ss["limit_total_fraction"] = _preset_tot
+
+            col1, col2 = st.columns(2)
+            with col1:
+                _ss["limit_LL_fraction"] = st.number_input(
+                    "L / [n] for LL limit", 100, 1000,
+                    int(_ss.get("limit_LL_fraction", 360)), 10, key="_lim_ll_frac")
+            with col2:
+                _ss["limit_total_fraction"] = st.number_input(
+                    "L / [n] for total deflection limit", 100, 1000,
+                    int(_ss.get("limit_total_fraction", 240)), 10, key="_lim_tot_frac")
+
+            _L_disp = float(_ss.get("L_an", 5850))
+            st.markdown(
+                f"**LL limit**    = L / {_ss['limit_LL_fraction']} = "
+                f"{_L_disp / _ss['limit_LL_fraction']:.1f} mm  |  "
+                f"**Total limit** = L / {_ss['limit_total_fraction']} = "
+                f"{_L_disp / _ss['limit_total_fraction']:.1f} mm"
+            )
+
+        # Results
+        col1, col2, col3 = st.columns(3)
+        col1.metric(f"Limit LL  (L/{_ss.get('limit_LL_fraction',360)})",
+                    f"{_ss['def_limit_ll_mm']:.1f} mm")
+        col2.metric(f"Limit total  (L/{_ss.get('limit_total_fraction',240)})",
+                    f"{_ss['def_limit_total_mm']:.1f} mm")
+        col3.metric("Actual total (long-term)",
+                    f"{_ss['def_total_longterm']:.1f} mm")
+
+        _stll3  = _ss["def_status_ll"]
+        _sttot3 = _ss["def_status_total"]
+        st.markdown(f"**LL status:** {_stll3}  |  **Total status:** {_sttot3}")
+        if _sttot3 == "NG":
+            st.error("Total deflection exceeds code limit. Consider increasing depth or prestress.")
+        else:
+            st.success("Deflection within code limits.")
+
+        st.markdown("---")
+
+        # ── I.3b Thermal camber (FIX-4 Addition 2) ───────────────────────────
+        section_hdr("I.3b", "Thermal Camber (optional)")
+        _ss["has_thermal"] = st.checkbox(
+            "Include temperature differential camber?",
+            bool(_ss.get("has_thermal", False)), key="_has_thermal")
+        if _ss["has_thermal"]:
+            col1, col2 = st.columns(2)
+            with col1:
+                _ss["delta_T"] = st.number_input(
+                    "ΔT — Temperature differential top-to-bottom (°C)",
+                    -50.0, 50.0, float(_ss.get("delta_T", 0.0)), 0.5, key="_delta_T")
+                st.caption("Positive = top warmer than bottom → upward hogging camber")
+            with col2:
+                _ss["alpha_T"] = st.number_input(
+                    "α_T — Thermal expansion coefficient (per °C)",
+                    1e-6, 20e-6, float(_ss.get("alpha_T", 10e-6)),
+                    format="%.6f", step=1e-6, key="_alpha_T")
+                st.caption("Normal concrete: 10 × 10⁻⁶ /°C")
+
+            _dtherm = _ss.get("def_delta_thermal", 0.0)
+            st.markdown(
+                f"**Thermal camber formula:** δ_T = α_T × ΔT × L² / (8 × h)  "
+                f"= {_ss['alpha_T']:.2e} × {_ss['delta_T']:.1f} × {_ss['L_an']:.0f}² "
+                f"/ (8 × {_ss['h']:.0f}) = **{_dtherm:.3f} mm** "
+                f"({'upward ↑' if _dtherm >= 0 else 'downward ↓'})"
+            )
+        else:
+            _ss["delta_T"] = 0.0
+
+        st.markdown("---")
+
+    # ── I.4  Natural Frequency & Vibration (FIX-4 Addition 4) ────────────────
+    section_hdr("I.4", "Natural Frequency & Vibration Check")
+    st.caption(
+        "Ref: AISC Design Guide 11 (DG11)  |  ISO 10137:2007  "
+        "Simply-supported beam model."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        _ss["vibration_mode"] = st.selectbox(
+            "Occupancy / vibration mode",
+            ["Walking / Occupancy", "Machine / Equipment", "Sensitive (Lab/Hospital)"],
+            index=["Walking / Occupancy", "Machine / Equipment",
+                   "Sensitive (Lab/Hospital)"].index(
+                       _ss.get("vibration_mode", "Walking / Occupancy")),
+            key="_vib_mode"
+        )
+    with col2:
+        _ss["damping_ratio"] = st.number_input(
+            "Damping ratio β (%)",
+            0.5, 20.0, float(_ss.get("damping_ratio", 3.0)), 0.5,
+            key="_damping_ratio",
+            help="Typical: 3% office, 5% partition walls, 2% bare concrete"
+        )
+
+    # Vibration results (computed by auto-calc via get_deflection_results)
+    _fn_val   = _ss.get("def_vib_fn",    0.0)
+    _fn_lim   = _ss.get("def_vib_fn_limit", 8.0)
+    _fn_ok    = _ss.get("def_vib_fn_ok", False)
+    _ag_val   = _ss.get("def_vib_ag",    0.0)
+    _ag_lim   = _ss.get("def_vib_ag_limit", 0.005)
+    _ag_ok    = _ss.get("def_vib_ag_ok", False)
+    _W_eff    = _ss.get("def_vib_W_eff", 0.0)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "Natural Frequency f_n",
+        f"{_fn_val:.2f} Hz",
+        delta=f"≥ {_fn_lim:.1f} Hz required → {'OK' if _fn_ok else 'NG'}",
+        delta_color="normal" if _fn_ok else "inverse"
+    )
+    col2.metric(
+        "Peak acceleration a/g",
+        f"{_ag_val*100:.3f} %",
+        delta=f"≤ {_ag_lim*100:.1f}% limit → {'OK' if _ag_ok else 'NG'}",
+        delta_color="normal" if _ag_ok else "inverse"
+    )
+    col3.metric("Effective weight W_eff", f"{_W_eff:.1f} kN")
+
+    if not _fn_ok:
+        st.error(
+            f"⚠️ Natural frequency f_n = {_fn_val:.2f} Hz < {_fn_lim:.1f} Hz limit "
+            f"({_ss.get('vibration_mode','—')}). "
+            "Consider increasing section depth, composite action, or adding tuned mass damper."
+        )
+    if not _ag_ok:
+        st.warning(
+            f"⚠️ Peak acceleration a/g = {_ag_val*100:.3f}% > {_ag_lim*100:.2f}% limit. "
+            "Investigate damping or section stiffness."
+        )
+    if _fn_ok and _ag_ok:
+        st.success("Vibration check passed: f_n and a/g within limits.")
+
+    with st.expander("📐 Vibration Calculation Detail", expanded=False):
+        _L_m_vib = _ss.get("def_vib_L_m",    float(_ss.get("L_an", 5850)) / 1000)
+        _EI_vib  = _ss.get("def_vib_EI_SI",  0.0)
+        _m_vib   = _ss.get("def_vib_W_eff",  0.0) / 9.81 / _L_m_vib if _L_m_vib > 0 else 0.0
+        st.markdown(f"""
+**Formula:** f_n = (π² / (2L²)) × √(EI / m)  [AISC DG11]
+
+| Parameter | Value |
+|---|---|
+| Span L | {_L_m_vib:.3f} m |
+| EI (composite) | {_EI_vib:.3e} N·m² |
+| Mass/length m | {_m_vib:.2f} kg/m |
+| Effective weight W_eff | {_W_eff:.1f} kN |
+| Damping β | {_ss.get('damping_ratio', 3.0):.1f} % |
+| **f_n** | **{_fn_val:.3f} Hz** |
+| Limit f_n | {_fn_lim:.1f} Hz |
+| **a/g** | **{_ag_val*100:.4f}%** |
+| Limit a/g | {_ag_lim*100:.2f}% |
+
+**Peak acceleration:** a/g = P₀ × e^(−2πβ) / W_eff  
+P₀ = 0.29 kN (walking excitation, AISC DG11 Table 4.2)  
+**Ref:** AISC Design Guide 11 | ISO 10137:2007
+""")
+
+# =============================================================================
+# TAB J — Report
+# =============================================================================
+with tab_J:
+    st.markdown("## J · Report Generator")
+    st.caption("Generate professional calculation report — Word (.docx) or PDF.")
+    st.info("Report includes: inputs, span, section props, losses, stress checks, capacity, deflection, SFD/BMD.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📄 Generate Word Report (.docx)", use_container_width=True):
+            with st.spinner("Generating Word report..."):
+                _wb2, _ = get_report_bytes(_ss)
+                if _wb2:
+                    st.download_button(
+                        label="⬇ Download Word Report", data=_wb2,
+                        file_name=f"HCS_Design_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True)
+                else:
+                    st.error("Word generation failed. Check python-docx installation.")
+    with col2:
+        if st.button("📑 Generate PDF Report", use_container_width=True):
+            with st.spinner("Generating PDF report..."):
+                _, _pb2 = get_report_bytes(_ss)
+                if _pb2:
+                    st.download_button(
+                        label="⬇ Download PDF Report", data=_pb2,
+                        file_name=f"HCS_Design_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True)
+                else:
+                    st.error("PDF generation failed. Check fpdf2/kaleido installation.")
+    st.markdown("---")
+    st.markdown("""
+**Report includes:**
+- All inputs (section, materials, span, loads with load factors)
+- Transfer & development length
+- Section properties (gross, net, composite)
+- Prestress losses (ES, CR, SH, RE)
+- Stress checks at all stages (transfer, lifting, construction, service)
+- Flexural and shear capacity (Mn, Vn, DCR)
+- Deflection and camber (initial, long-term, code limits)
+- SFD/BMD diagrams
+- Code compliance remarks
+""")
+
+# =============================================================================
+# TAB Summary
+# =============================================================================
+with tab_sum:
+    st.markdown("## Design Summary")
+    _ok_geom = _ss.get("geom_valid", False)
+    _ok_M2   = _ss.get("cap_DCR_M", 999) <= 1.0
+    _ok_V2   = _ss.get("cap_DCR_V", 999) <= 1.0
+    _ok_def2 = _ss.get("def_status_total", "NG") == "OK"
+    _ok_str2 = all(
+        _ss.get(_k2, {}).get("status", "NG") == "OK"
+        for _k2 in ["sc_transfer", "sc_lifting", "sc_construction", "sc_service"]
+        if _k2 in _ss
+    )
+    _sum_df = pd.DataFrame({
+        "Check": [
+            "Geometry valid",   "SW_HCS",
+            "L_clear",          "L_an",
+            "Prestress dev.",   "Flexure DCR_M",
+            "Shear DCR_V",      "Stress checks",
+            "Deflection",       "Vibration f_n",
+        ],
+        "Value": [
+            "✅ OK" if _ok_geom else "❌ Fail",
+            f"{_ss.get('SW_HCS', 0):.3f} kN/m²",
+            f"{_ss.get('L_clear', 0):.0f} mm",
+            f"{_ss.get('L_an', 0):.0f} mm",
+            _ss.get("lb_ps_status", "—"),
+            f"{_ss.get('cap_DCR_M', 999):.3f}  {'✅' if _ok_M2 else '❌'}",
+            f"{_ss.get('cap_DCR_V', 999):.3f}  {'✅' if _ok_V2 else '❌'}",
+            "✅ All OK" if _ok_str2 else "❌ Fail",
+            f"{_ss.get('def_total_longterm', 0):.2f} mm  {'✅' if _ok_def2 else '❌'}",
+            f"{_ss.get('def_vib_fn', 0):.2f} Hz  "
+            f"{'✅' if _ss.get('def_vib_fn_ok', False) else '❌'}",
+        ]
+    })
+    st.dataframe(_sum_df, use_container_width=True, hide_index=True)
+    st.caption("Full step-by-step calculations: use J · Report tab.")
