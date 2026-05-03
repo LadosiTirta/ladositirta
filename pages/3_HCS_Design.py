@@ -1528,6 +1528,8 @@ with tab_sum:
             "Prestress dev.",   "Flexure DCR_M",
             "Shear DCR_V",      "Stress checks",
             "Deflection",       "Vibration f_n",
+            "Natural frequency", "Vibration status",
+            "Lifting check",
         ],
         "Value": [
             "✅ OK" if _ok_geom else "❌ Fail",
@@ -1541,6 +1543,10 @@ with tab_sum:
             f"{_ss.get('def_total_longterm', 0):.2f} mm  {'✅' if _ok_def2 else '❌'}",
             f"{_ss.get('def_vib_fn', 0):.2f} Hz  "
             f"{'✅' if _ss.get('def_vib_fn_ok', False) else '❌'}",
+            # New rows
+            f"{_ss.get('def_vib_fn', 0):.2f} Hz",
+            "✅ OK" if _ss.get('def_vib_fn_ok', False) else "❌ NG",
+            _ss.get('sc_lifting', {}).get('status', '—'),
         ]
     })
     st.dataframe(_sum_df, use_container_width=True, hide_index=True)
