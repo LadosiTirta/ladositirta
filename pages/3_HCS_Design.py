@@ -1,5 +1,5 @@
 # =============================================================================
-# HCS DESIGN APP — Phase 7: Complete (All phases 1-7)
+# HCS DESIGN APP — v1.1 - Full Design Suite
 # =============================================================================
 # Reference: ACI/PCI CODE-319-25 | PCI Design Handbook, 8th Edition
 # Units: SI only (mm, kN, MPa)
@@ -13,6 +13,8 @@
 #   FIX-5: Timezone offset, Assumed loss input, Shoring input (multiple supports),
 #           SFD/BMD fix, combined with all features of arsip4
 #   FIX-6: Fix StreamlitValueBelowMinError in Construction Stage shoring inputs
+#   FIX-7: v1.1 polish – header, structural integrity note, summary rows,
+#           cross‑section sketch placeholder
 # =============================================================================
 
 import streamlit as st
@@ -22,6 +24,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import math
+import os
 
 # hcs imports
 from hcs.constants import WIRE_PROPS, STRAND_PROPS, PRESET_TABLE
@@ -394,28 +397,28 @@ with tab_A:
         index=0 if _ss["hcs_type"] == "Full HCS (Hollow Core)" else 1,
         horizontal=True, key="_hcs_type"
     )
-if _ss["hcs_type"] == "Half Slab (Open Top)":
-    _ss["tf_top"] = 0
-    st.info("Half Slab: top flange tf_top forced = 0.")
+    if _ss["hcs_type"] == "Half Slab (Open Top)":
+        _ss["tf_top"] = 0
+        st.info("Half Slab: top flange tf_top forced = 0.")
 
-# ── Cross‑section sketch placeholder (Tab A) ──────────────────────────
-# map HCS type to sketch filename key
-_hcs_type_key = "hcs_full" if _ss["hcs_type"] == "Full HCS (Hollow Core)" else "half_slab"
-sketch_path = f"assets/sketch_{_hcs_type_key}.png"
-if os.path.exists(sketch_path):
-    st.image(sketch_path,
-             caption="Cross‑section reference sketch",
-             use_column_width=True)
-else:
-    st.info("ℹ️ Place sketch PNG files in assets/ folder:\n"
-            "  assets/sketch_hcs_full.png\n"
-            "  assets/sketch_half_slab.png\n"
-            "You can prepare these sketches from your CAD drawings.")
-# ──────────────────────────────────────────────────────────────────────
+    # ── Cross‑section sketch placeholder (Tab A) ──────────────────────────
+    # map HCS type to sketch filename key
+    _hcs_type_key = "hcs_full" if _ss["hcs_type"] == "Full HCS (Hollow Core)" else "half_slab"
+    sketch_path = f"assets/sketch_{_hcs_type_key}.png"
+    if os.path.exists(sketch_path):
+        st.image(sketch_path,
+                 caption="Cross‑section reference sketch",
+                 use_column_width=True)
+    else:
+        st.info("ℹ️ Place sketch PNG files in assets/ folder:\n"
+                "  assets/sketch_hcs_full.png\n"
+                "  assets/sketch_half_slab.png\n"
+                "You can prepare these sketches from your CAD drawings.")
+    # ──────────────────────────────────────────────────────────────────────
 
-st.markdown("---")
+    st.markdown("---")
 
-section_hdr("A.1", "Standard Preset")
+    section_hdr("A.1", "Standard Preset")
     _pkeys = list(PRESET_TABLE.keys()) if _ss["hcs_type"] == "Full HCS (Hollow Core)" \
              else ["Custom (manual input)"]
     if _ss["hcs_type"] == "Half Slab (Open Top)":
@@ -1012,7 +1015,7 @@ verify with project structural engineer.
 # ============================================================
 
 with tab_F:
-    st.markdown("## F - Section Properties")
+    st.markdown("## F · Section Properties")
     st.caption("Ref: ACI/PCI 319-25 Cl. 26.12 | Full step-by-step in Report")
     section_hdr("F.1", "Gross Section")
     st.markdown(
