@@ -338,12 +338,13 @@ for _k, _v in _def.items():
 st.markdown("""
 <div class="app-header">
     <div>
-        <span class="phase-badge">PHASE 7</span>
+        <span class="phase-badge">v1.1 - Full Design Suite</span>
         <span class="phase-badge">ACI/PCI 319-25</span>
         <span class="phase-badge">PCI 8th Ed.</span>
     </div>
     <h1>🏗️ Hollow Core Slab Design</h1>
-    <div class="subtitle">Full Design Suite · SI Units · v1.0</div>
+    <div class="subtitle">Full Design Suite · SI Units · v1.1</div>
+    <div class="subtitle" style="font-size:0.9rem; opacity:0.8;">Ref: ACI/PCI 319-25 | PCI Design Handbook 8th Ed.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -393,12 +394,28 @@ with tab_A:
         index=0 if _ss["hcs_type"] == "Full HCS (Hollow Core)" else 1,
         horizontal=True, key="_hcs_type"
     )
-    if _ss["hcs_type"] == "Half Slab (Open Top)":
-        _ss["tf_top"] = 0
-        st.info("Half Slab: top flange tf_top forced = 0.")
-    st.markdown("---")
+if _ss["hcs_type"] == "Half Slab (Open Top)":
+    _ss["tf_top"] = 0
+    st.info("Half Slab: top flange tf_top forced = 0.")
 
-    section_hdr("A.1", "Standard Preset")
+# ── Cross‑section sketch placeholder (Tab A) ──────────────────────────
+# map HCS type to sketch filename key
+_hcs_type_key = "hcs_full" if _ss["hcs_type"] == "Full HCS (Hollow Core)" else "half_slab"
+sketch_path = f"assets/sketch_{_hcs_type_key}.png"
+if os.path.exists(sketch_path):
+    st.image(sketch_path,
+             caption="Cross‑section reference sketch",
+             use_column_width=True)
+else:
+    st.info("ℹ️ Place sketch PNG files in assets/ folder:\n"
+            "  assets/sketch_hcs_full.png\n"
+            "  assets/sketch_half_slab.png\n"
+            "You can prepare these sketches from your CAD drawings.")
+# ──────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+
+section_hdr("A.1", "Standard Preset")
     _pkeys = list(PRESET_TABLE.keys()) if _ss["hcs_type"] == "Full HCS (Hollow Core)" \
              else ["Custom (manual input)"]
     if _ss["hcs_type"] == "Half Slab (Open Top)":
@@ -980,27 +997,22 @@ with tab_E:
     st.markdown("---")
     section_hdr("E.2", "Structural Integrity Ties")
     st.markdown("""
-**Structural Integrity Ties per ACI/PCI CODE-319-25 Sec. 16.5:**
+Structural integrity ties per ACI/PCI 319-25 Sec. 16.5:
+- **Longitudinal:** min 13 kN/m of floor width
+- **Transverse:** min 13 kN/m of floor length
+- **Perimeter:** min 71 kN
 
-These tie requirements apply to **ALL SDC categories**:
-
-| Tie Type | Minimum Requirement |
-|---|---|
-| **Longitudinal ties** | ≥ 0.9 kN per metre of floor width |
-| **Transverse ties** | ≥ 0.9 kN per metre of floor length |
-| **Peripheral ties** | ≥ 70 kN total force (around floor perimeter) |
-
-> **Ref: ACI/PCI CODE-319-25 Sec. 16.5**
->
-> Connections between HCS units and supporting members must be designed and detailed
-> to transfer these forces under gravity and lateral load combinations.
+These requirements apply to **ALL SDC categories**.
+Detailed tie design is outside scope of this calculator —
+verify with project structural engineer.
 """)
 
-# =============================================================================
-# TAB F — Section Properties
-# =============================================================================
+# ============================================================
+# TAB F – Section Properties
+# ============================================================
+
 with tab_F:
-    st.markdown("## F · Section Properties")
+    st.markdown("## F - Section Properties")
     st.caption("Ref: ACI/PCI 319-25 Cl. 26.12 | Full step-by-step in Report")
     section_hdr("F.1", "Gross Section")
     st.markdown(
