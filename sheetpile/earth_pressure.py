@@ -1143,13 +1143,19 @@ def hitung_distribusi_tekanan(
         pa = max(0.0, Ka_z * sv - 2.0 * cohesion_z * sqrt_Ka)
 
         # Tekanan pasif (depan turap — hanya di bawah dasar galian)
+        # PENTING: sigma_v untuk pasif dihitung dari DASAR GALIAN (z=H), bukan dari permukaan.
+        # Ini karena tanah di depan turap (sisi galian) mulai dari elevasi dasar galian.
+        # Referensi: NAVFAC DM-7.01, Ch.4, §4.3(c); USS Sheet Pile Manual Ch.2, §2.5
         if z > H - dz / 2.0:
-            # Kedalaman dari dasar galian
-            z_pasif = z - H
-            sv_p, u_p, lyr_p = _hitung_sigma_v_efektif(z)
-            # Re-hitung sigma_v dari dasar galian saja (pasif mulai dari 0)
-            sv_pasif = max(0.0, Kp_z * (sv_p) + 2.0 * cohesion_z * sqrt_Kp)
-            pp = sv_pasif
+            z_pasif   = z - H          # kedalaman di bawah dasar galian [m]
+            # MAT sisi pasif diukur dari dasar galian (konservatif: MAT = 0 di dasar galian)
+            hw_pasif  = max(0.0, z_pasif)
+            u_pasif   = gamma_w * hw_pasif
+            # Sigma_v efektif sisi pasif (mulai dari 0 di dasar galian, pakai gamma')
+            sv_pasif_eff = max(0.0, (lyr["gamma_sat"] - gamma_w) * z_pasif)
+            # Tekanan pasif efektif + tekanan air pori
+            pp_eff    = max(0.0, Kp_z * sv_pasif_eff + 2.0 * cohesion_z * sqrt_Kp)
+            pp        = pp_eff + u_pasif
         else:
             pp = 0.0
 
@@ -1567,4 +1573,3 @@ if __name__ == "__main__":
     fig.savefig(output_file, dpi=150, bbox_inches="tight")
     print(f"\n  Diagram tersimpan: {output_file}")
     print("\nSelesai.")
-
