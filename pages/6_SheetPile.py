@@ -665,32 +665,66 @@ with tab4:
     else:
         sec  = st.session_state["hasil_section"]["section"]
         sv2  = sec["nilai"]
-        _status_box(sec["status"], "MEMENUHI" in sec["status"])
 
-        if tipe_material == "Baja":
-            s1,s2,s3,s4 = st.columns(4)
-            s1.metric("sigma_allow", f"{sv2['sigma_allow']:.1f} MPa")
-            s2.metric("S_req",       f"{sv2['S_req']:.2f} cm3/m")
-            pt = sv2.get("profil_terpilih")
-            s3.metric("Profil",  pt["tipe"] if pt else "—")
-            s4.metric("S_pakai", f"{pt['S']:.1f} cm3/m" if pt else "—")
-            if sv2.get("kandidat_profil"):
-                import pandas as pd
-                with st.expander("📋 Kandidat profil"):
-                    st.dataframe(pd.DataFrame([{
-                        "Tipe":p["tipe"],"S(cm3/m)":p["S"],"Berat(kg/m2)":p["berat"],
-                        "Ix(cm4/m)":p["Ix"],"Material":p["material"],
-                    } for p in sv2["kandidat_profil"]]), use_container_width=True, hide_index=True)
+        # Deteksi mismatch: user ganti material tapi belum tekan HITUNG lagi
+        hasil_adalah_baja  = "sigma_allow" in sv2
+        hasil_adalah_beton = "Mu" in sv2
+        mismatch = (
+            (tipe_material == "Baja"          and not hasil_adalah_baja) or
+            (tipe_material == "Beton Pracetak" and not hasil_adalah_beton)
+        )
+        if mismatch:
+            st.warning(
+                f"⚠️ Material dipilih **{tipe_material}** tetapi hasil yang tersimpan "
+                f"adalah material lain. Tekan **HITUNG** kembali untuk memperbarui."
+            )
         else:
-            b1,b2,b3 = st.columns(3)
-            b1.metric("Mu",      f"{sv2['Mu']:.2f} kN.m/m")
-            b2.metric("As_req",  f"{sv2['As_req']:.2f} mm2/m")
-            b3.metric("phi_Vc",  f"{sv2['phi_Vc']:.2f} kN/m")
-            _status_box(f"Geser: phi_Vc={sv2['phi_Vc']:.2f} >= Vu={sv2['Vu']:.2f} kN/m",
-                         sv2["aman_geser"])
+            _status_box(sec["status"], "MEMENUHI" in sec["status"])
 
-        with st.expander("📋 Langkah desain penampang"):
-            st.code(sd_fmt(sec["langkah"]), language="")
+            if hasil_adalah_baja:
+                s1,s2,s3,s4 = st.columns(4)
+                s1.metric("sigma_allow", f"{sv2['sigma_allow']:.1f} MPa")
+                s2.metric("S_req",       f"{sv2['S_req']:.2f} cm3/m")
+                pt = sv2.get("profil_terpilih")
+                s3.metric("Profil",  pt["tipe"] if pt else "—")
+                s4.metric("S_pakai", f"{pt['S']:.1f} cm3/m" if pt else "—")
+                if sv2.get("kandidat_profil"):
+                    import pandas as pd
+                    with st.expander("📋 Kandidat profil"):
+                        st.dataframe(pd.DataFrame([{
+                            "Tipe":p["tipe"],"S(cm3/m)":p["S"],
+                            "Berat(kg/m2)":p["berat"],
+                            "Ix(cm4/m)":p["Ix"],"Material":p["material"],
+                        } for p in sv2["kandidat_profil"]]),
+                        use_container_width=True, hide_index=True)
+
+            elif hasil_adalah_beton:
+                b1,b2,b3 = st.columns(3)
+                b1.metric("Mu",     f"{sv2.get('Mu', 0):.2f} kN.m/m")
+                b2.metric("As_req", f"{sv2.get('As_req', 0):.2f} mm2/m")
+                b3.metric("phi_Vc", f"{sv2.get('phi_Vc', 0):.2f} kN/m")
+                _status_box(
+                    f"Geser: phi_Vc={sv2.get('phi_Vc',0):.2f} >= Vu={sv2.get('Vu',0):.2f} kN/m",
+                    sv2.get("aman_geser", False)
+                )
+                # Info tambahan tulangan
+                rho = sv2.get('rho_pakai', 0)
+                rho_min = sv2.get('rho_min', 0)
+                rho_max = sv2.get('rho_max', 0)
+                import pandas as pd
+                st.dataframe(pd.DataFrame([{"Parameter":k,"Nilai":v} for k,v in [
+                    ("rho_tulangan", f"{sv2.get('rho_tulangan',0):.6f}"),
+                    ("rho_min",      f"{rho_min:.6f}"),
+                    ("rho_max",      f"{rho_max:.6f}"),
+                    ("rho_pakai",    f"{rho:.6f}"),
+                    ("As_req (mm2/m)", f"{sv2.get('As_req',0):.2f}"),
+                    ("As_min (mm2/m)", f"{sv2.get('As_min',0):.2f}"),
+                    ("Status lentur",  "OK" if sv2.get('aman_lentur') else "REVISI"),
+                    ("Status geser",   "OK" if sv2.get('aman_geser')  else "REVISI"),
+                ]]), use_container_width=True, hide_index=True)
+
+            with st.expander("📋 Langkah desain penampang"):
+                st.code(sd_fmt(sec["langkah"]), language="")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -801,16 +835,23 @@ with tab6:
             ("V_max",    f"{float(np.max(np.abs(gv['V_array']))):.3f}","kN/m"),
         ]
         if tipe_turap != "Kantilever":
-            baris.append(("Ra (angkur)",f"{sv.get('Ra',0):.3f}","kN/m"))
-        if tipe_material == "Baja":
+            baris.append(("Ra (angkur)", f"{sv.get('Ra',0):.3f}", "kN/m"))
+
+        # Gunakan kunci yang benar-benar ada di dict hasil (bukan dari tipe_material UI)
+        if "sigma_allow" in sval:          # hasil adalah desain BAJA
             pt = sval.get("profil_terpilih")
-            baris += [("sigma_allow",f"{sval['sigma_allow']:.2f}","MPa"),
-                      ("S_req",f"{sval['S_req']:.2f}","cm3/m"),
-                      ("Profil",pt["tipe"] if pt else "—","—"),
-                      ("S_pakai",f"{pt['S']:.1f}" if pt else "—","cm3/m")]
-        else:
-            baris += [("Mu",f"{sval['Mu']:.3f}","kN.m/m"),
-                      ("As_req",f"{sval['As_req']:.2f}","mm2/m")]
+            baris += [
+                ("sigma_allow", f"{sval.get('sigma_allow',0):.2f}", "MPa"),
+                ("S_req",       f"{sval.get('S_req',0):.2f}",       "cm3/m"),
+                ("Profil",      pt["tipe"] if pt else "—",          "—"),
+                ("S_pakai",     f"{pt['S']:.1f}" if pt else "—",    "cm3/m"),
+            ]
+        elif "Mu" in sval:                 # hasil adalah desain BETON
+            baris += [
+                ("Mu",     f"{sval.get('Mu',0):.3f}",     "kN.m/m"),
+                ("As_req", f"{sval.get('As_req',0):.2f}", "mm2/m"),
+                ("phi_Vc", f"{sval.get('phi_Vc',0):.2f}", "kN/m"),
+            ]
         st.dataframe(pd.DataFrame([{"Parameter":p,"Nilai":v,"Satuan":s}
                                     for p,v,s in baris]),
                       use_container_width=True, hide_index=True)
