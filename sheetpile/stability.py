@@ -269,20 +269,43 @@ def free_earth_support(
             f"c={lyr['cohesion']:.1f} kPa"
         )
 
-    # ── Fungsi objektif: momen neto terhadap angkur pada D tertentu ──────────
-    def momen_neto_angkur(D_coba: float) -> float:
+    # ── Fungsi bantu: hitung Mo_aktif dan Mo_pasif terhadap angkur ──────────
+    def _mo_aktif_pasif(D_coba: float):
         """
-        Hitung jumlah momen semua gaya neto terhadap titik angkur.
-        Nilai nol  = keseimbangan (D_min).
-        Positif    = aktif mendominasi (perlu D lebih dalam).
+        Hitung momen aktif dan pasif terhadap titik angkur secara TERPISAH.
+        Rumus FES yang benar (NAVFAC DM-7.02, §3.2):
+            Mo_aktif = integral[ Pa(z) * (z - z_angkur) dz ]  dari 0 ke H+D
+            Mo_pasif = integral[ Pp(z) * (z - z_angkur) dz ]  dari H ke H+D
+            SF_momen = Mo_pasif / Mo_aktif
+            D_min    = D agar SF_momen = SF_min
         """
         dist = _siapkan_distribusi(
             lapisan_tanah, H, D_coba, muka_air, surcharge,
             metode_Ka, delta, gamma_w, dz,
         )
-        z   = dist["z_array"]
-        pn  = dist["tekanan_neto"]
-        return _momen_terhadap_titik(z, pn, z_angkur)
+        z  = dist["z_array"]
+        pa = dist["tekanan_aktif"]
+        pp = dist["tekanan_pasif"]
+
+        lengan_a  = z - z_angkur   # positif di bawah angkur, negatif di atas
+        Mo_aktif  = float(np.trapezoid(pa * lengan_a, z))
+
+        mask_pen  = z >= H - dz / 2
+        lengan_p  = z[mask_pen] - z_angkur
+        Mo_pasif  = float(np.trapezoid(pp[mask_pen] * lengan_p, z[mask_pen]))
+
+        # Ra dari keseimbangan gaya horisontal
+        Fa = float(np.trapezoid(pa, z))
+        Fp = float(np.trapezoid(pp[mask_pen], z[mask_pen]))
+        Ra = Fa - Fp   # positif = angkur tarik; negatif = pasif overdominasi
+
+        SF = Mo_pasif / Mo_aktif if Mo_aktif > 1e-9 else 999.0
+        return SF, Ra, Mo_aktif, Mo_pasif
+
+    # Fungsi objektif: SF(D) - SF_min = 0 saat keseimbangan
+    def fungsi_objek_SF(D_coba: float) -> float:
+        SF, _, _, _ = _mo_aktif_pasif(D_coba)
+        return SF - SF_min
 
     # ── Iterasi cari D_min ────────────────────────────────────────────────────
     langkah += [
@@ -290,50 +313,77 @@ def free_earth_support(
         _garis("-"),
         "  LANGKAH 1 — Iterasi mencari D_min",
         _garis("-"),
-        "  Syarat: Jumlah momen neto terhadap titik angkur = 0",
-        "  Rumus : Mo(D) = integral[ p_neto(z) * (z_angkur - z) ] dz = 0",
+        "  Metode  : Cari D agar SF_momen = SF_min",
+        "  Rumus   : SF_momen = Mo_pasif / Mo_aktif terhadap titik angkur",
+        "            Mo_aktif = integral[ Pa(z) * (z - z_angkur) dz ]   (0 ke H+D)",
+        "            Mo_pasif = integral[ Pp(z) * (z - z_angkur) dz ]   (H ke H+D)",
+        "  Syarat  : SF_momen = SF_min (D terkecil yang memenuhi SF)",
+        f"  Ref     : NAVFAC DM-7.02, Ch.3, §3.2; USS Sheet Pile Manual Ch.3",
         "",
-        "  Proses bisection (D_bawah=0.1 m, D_atas=D_maks):",
-        f"  {'Iterasi':>8} {'D_coba (m)':>12} {'Mo (kN.m/m)':>15} {'Keterangan':>12}",
-        "  " + "-" * 52,
+        f"  {'Iterasi':>8} {'D_coba (m)':>12} {'SF_momen':>12} {'Mo_aktif':>12} {'Mo_pasif':>12}",
+        "  " + "-" * 60,
     ]
 
-    # Cek apakah tanda berubah dalam rentang [0.1, D_maks]
-    D_bawah = 0.1
+    D_bawah = max(0.1, H * 0.05)
     D_atas  = D_maks
-    mo_bawah = momen_neto_angkur(D_bawah)
-    mo_atas  = momen_neto_angkur(D_atas)
 
-    if mo_bawah * mo_atas > 0:
-        # Tanda sama — coba perbesar D_maks
-        D_atas  = D_maks * 2
-        mo_atas = momen_neto_angkur(D_atas)
+    fo_bawah = fungsi_objek_SF(D_bawah)
+    fo_atas  = fungsi_objek_SF(D_atas)
 
-    # Iterasi bisection manual (5 iterasi log)
-    D_coba = D_bawah
-    for it in range(1, 8):
-        D_coba = (D_bawah + D_atas) / 2.0
-        mo     = momen_neto_angkur(D_coba)
-        ket    = "aktif>>pasif" if mo > 0 else "pasif>>aktif"
-        langkah.append(
-            f"  {it:>8} {D_coba:>12.4f} {mo:>15.4f} {ket:>12}"
-        )
-        if mo > 0:
-            D_bawah = D_coba
+    if fo_bawah >= 0 and fo_atas >= 0:
+        # SF selalu >= SF_min bahkan di D kecil → D_min = D_bawah (sudah aman)
+        D_min = D_bawah
+        SF_at_Dmin, Ra_at_Dmin, Mo_a, Mo_p = _mo_aktif_pasif(D_min)
+        langkah += [
+            f"  SF sudah memenuhi di D_min = {D_bawah:.2f} m (SF = {fo_bawah+SF_min:.3f})",
+            f"  D_min = {D_min:.4f} m  (batas minimum praktis)",
+        ]
+    elif fo_bawah * fo_atas <= 0:
+        # Zero crossing ada dalam rentang [D_bawah, D_atas] — bisection
+        for it in range(1, 12):
+            D_coba = (D_bawah + D_atas) / 2.0
+            fo     = fungsi_objek_SF(D_coba)
+            SF_c, _, Mo_a_c, Mo_p_c = _mo_aktif_pasif(D_coba)
+            ket = "SF > SF_min, perlu D lebih kecil" if fo > 0 else "SF < SF_min, perlu D lebih besar"
+            langkah.append(
+                f"  {it:>8} {D_coba:>12.4f} {SF_c:>12.4f} {Mo_a_c:>12.3f} {Mo_p_c:>12.3f}"
+            )
+            if fo > 0:
+                D_atas = D_coba
+            else:
+                D_bawah = D_coba
+            if abs(D_atas - D_bawah) < 1e-3:
+                break
+        try:
+            D_min = float(optimize.brentq(fungsi_objek_SF, D_bawah, D_atas, xtol=1e-5))
+        except (ValueError, Exception):
+            D_min = (D_bawah + D_atas) / 2.0
+        SF_at_Dmin, Ra_at_Dmin, Mo_a, Mo_p = _mo_aktif_pasif(D_min)
+    else:
+        # fo_atas < 0: SF tidak pernah mencapai SF_min bahkan di D_maks
+        # Coba perbesar D_maks sampai SF tercapai
+        D_coba_besar = D_maks
+        for mul in [2, 4, 8]:
+            D_coba_besar = D_maks * mul
+            fo_besar = fungsi_objek_SF(D_coba_besar)
+            if fo_bawah * fo_besar <= 0:
+                D_atas = D_coba_besar
+                try:
+                    D_min = float(optimize.brentq(fungsi_objek_SF, D_bawah, D_atas, xtol=1e-5))
+                except (ValueError, Exception):
+                    D_min = D_maks
+                break
         else:
-            D_atas = D_coba
-        if abs(D_atas - D_bawah) < 1e-4:
-            break
-
-    # Refinement dengan brentq scipy
-    try:
-        D_min = float(optimize.brentq(momen_neto_angkur, D_bawah, D_atas, xtol=1e-5))
-    except ValueError:
-        D_min = D_coba   # fallback ke bisection terakhir
+            D_min = D_maks
+        SF_at_Dmin, Ra_at_Dmin, Mo_a, Mo_p = _mo_aktif_pasif(D_min)
+        langkah.append(f"  PERINGATAN: SF_min tidak tercapai dalam D <= {D_maks:.1f} m")
 
     langkah += [
-        "  " + "-" * 52,
-        f"  --> D_min  = {D_min:.4f} m  (momen neto = 0)",
+        "  " + "-" * 60,
+        f"  --> D_min     = {D_min:.4f} m",
+        f"  --> SF_momen  = {SF_at_Dmin:.4f}  (syarat = {SF_min:.2f})",
+        f"  --> Mo_aktif  = {Mo_a:.3f} kN.m/m",
+        f"  --> Mo_pasif  = {Mo_p:.3f} kN.m/m",
     ]
 
     # ── D_design ──────────────────────────────────────────────────────────────
@@ -366,12 +416,13 @@ def free_earth_support(
     u_d  = dist_d["tekanan_air_pori"]
 
     # ── Gaya angkur Ra ────────────────────────────────────────────────────────
-    # Ra = Fnet - Pp_total  =>  dari keseimbangan gaya horizontal
-    Fnet = _integrasikan_trapz(z_d, pn_d)
-    # Ra dihitung dari keseimbangan: Ra + Pp_total = Fa_total
+    # Ra = Fa_total - Fp_total  (keseimbangan gaya horizontal)
+    # Positif = angkur menahan tarikan (normal)
+    # Ra dari hasil iterasi D_min sudah ada: Ra_at_Dmin
+    # Hitung ulang di D_design
     Fa_total = _integrasikan_trapz(z_d, pa_d)
     Fp_total = _integrasikan_trapz(z_d[z_d >= H], pp_d[z_d >= H])
-    Ra = Fa_total - Fp_total
+    Ra = max(0.0, Fa_total - Fp_total)  # jika negatif, angkur tidak dibutuhkan (SF sangat tinggi)
 
     langkah += [
         "",
@@ -379,14 +430,14 @@ def free_earth_support(
         "  LANGKAH 3 — Hitung Gaya Angkur (Ra)",
         _garis("-"),
         "  Prinsip: keseimbangan gaya horizontal",
-        "  Rumus  : Ra = Fa_total - Fp_total",
+        "  Rumus  : Ra = Fa_total - Fp_total  (harus >= 0)",
         "  di mana:",
-        "    Fa_total = integral(tekanan_aktif dz)  [seluruh tinggi turap]",
-        "    Fp_total = integral(tekanan_pasif dz)  [zona penetrasi saja]",
+        "    Fa_total = integral(Pa dz)  [seluruh tinggi turap H+D]",
+        "    Fp_total = integral(Pp dz)  [zona penetrasi D saja]",
         "",
         f"  Fa_total = {Fa_total:.3f} kN/m",
         f"  Fp_total = {Fp_total:.3f} kN/m",
-        f"  Hitung  : Ra = {Fa_total:.3f} - {Fp_total:.3f}",
+        f"  Hitung  : Ra = max(0, {Fa_total:.3f} - {Fp_total:.3f})",
         f"  Hasil   : Ra = {Ra:.3f} kN/m",
         _sub("  Satuan",  "kN/m (per meter lebar turap)"),
         _sub("  Standar", "NAVFAC DM-7.02, Ch. 3, Hal. 3-12"),
@@ -438,10 +489,12 @@ def free_earth_support(
         _sub("  ",        "USS Sheet Pile Design Manual (1975), Ch. 4, Hal. 4-2"),
     ]
 
-    # ── SF momen (kontrol keseimbangan) ───────────────────────────────────────
-    # SF = Momen_pasif / Momen_aktif terhadap angkur
-    Mo_aktif_angkur = abs(_momen_terhadap_titik(z_d, pa_d, z_angkur))
-    Mo_pasif_angkur = abs(_momen_terhadap_titik(z_d[z_d >= H], pp_d[z_d >= H], z_angkur))
+    # ── SF momen pada D_design — verifikasi akhir ─────────────────────────────
+    # Rumus benar: lengan = z - z_angkur (positif ke bawah dari angkur)
+    lengan_a   = z_d - z_angkur
+    Mo_aktif_angkur = float(np.trapezoid(pa_d * lengan_a, z_d))
+    mask_p     = z_d >= H
+    Mo_pasif_angkur = float(np.trapezoid(pp_d[mask_p] * (z_d[mask_p] - z_angkur), z_d[mask_p]))
     SF_momen = Mo_pasif_angkur / Mo_aktif_angkur if Mo_aktif_angkur > 1e-6 else 999.0
     status_sf = _status_sf(SF_momen, SF_min)
 
@@ -587,34 +640,27 @@ def fixed_earth_support_cantilever(
             f"c={lyr['cohesion']:.1f} kPa"
         )
 
-    # ── Fungsi objektif: keseimbangan momen terhadap z0 ─────────────────────
-    def momen_terhadap_z0(D_coba: float) -> float:
-        """
-        Hitung:
-        1. Distribusi tekanan neto pada D_coba
-        2. Titik zero pressure z0
-        3. Momen seluruh tekanan di atas z0 terhadap z0
-        Nilai nol = keseimbangan.
-        """
+    # ── Fungsi objektif: momen semua gaya terhadap ujung bawah turap ──────────
+    # Metode Blum / Fixed Earth yang benar (Das, 8th Ed, Ch.9.3;  NAVFAC DM-7.02, §3.1):
+    # D_min = D di mana momen total terhadap ujung bawah = 0
+    # M_ujung(D) = integral[Pa*(H+D-z)dz] - integral[Pp*(H+D-z)dz, H ke H+D]
+    #            = Ma_ujung - Mp_ujung = 0
+
+    def momen_terhadap_ujung(D_coba: float):
         dist = _siapkan_distribusi(
             lapisan_tanah, H, D_coba, muka_air, surcharge,
             metode_Ka, delta, gamma_w, dz,
         )
         z   = dist["z_array"]
-        pn  = dist["tekanan_neto"]
-
-        # Cari z0 di zona penetrasi (z > H)
-        mask_pen = z >= H - dz / 2
-        z_pen    = z[mask_pen]
-        pn_pen   = pn[mask_pen]
-
-        z0 = _titik_nol_tekanan(z_pen, pn_pen)
-        if z0 <= H:
-            z0 = H + 0.1   # fallback minimal
-
-        # Ambil tekanan di atas z0 saja
-        mask_atas = z <= z0 + dz / 2
-        return _momen_terhadap_titik(z[mask_atas], pn[mask_atas], z0)
+        pa  = dist["tekanan_aktif"]
+        pp  = dist["tekanan_pasif"]
+        z_ujung = H + D_coba
+        # Momen aktif terhadap ujung bawah
+        Ma = float(np.trapezoid(pa * (z_ujung - z), z))
+        # Momen pasif terhadap ujung bawah (zona penetrasi saja)
+        mask = z >= H - dz / 2
+        Mp = float(np.trapezoid(pp[mask] * (z_ujung - z[mask]), z[mask]))
+        return Ma - Mp   # = 0 saat keseimbangan; positif = aktif mendominasi
 
     # ── Iterasi bisection ────────────────────────────────────────────────────
     langkah += [
@@ -622,46 +668,60 @@ def fixed_earth_support_cantilever(
         _garis("-"),
         "  LANGKAH 1 — Iterasi mencari D_min",
         _garis("-"),
-        "  Syarat: Jumlah momen terhadap z0 = 0",
-        "  Rumus : Mo(D) = integral[ p_neto(z) * (z0 - z) ] dz = 0",
-        "          (integrasi dari permukaan sampai z0)",
+        "  Prinsip : Cari D agar momen semua gaya terhadap ujung bawah turap = 0",
+        "  Rumus   : Ma_ujung = integral[ Pa(z) * (H+D - z) dz ]   (0 ke H+D)",
+        "            Mp_ujung = integral[ Pp(z) * (H+D - z) dz ]   (H ke H+D)",
+        "  Syarat  : Ma_ujung - Mp_ujung = 0",
+        "  Ref     : Das, B.M., 8th Ed., Ch. 9.3; NAVFAC DM-7.02, §3.1",
         "",
-        f"  {'Iterasi':>8} {'D_coba (m)':>12} {'Mo (kN.m/m)':>15} {'Keterangan':>14}",
-        "  " + "-" * 54,
+        f"  {'Iterasi':>8} {'D_coba (m)':>12} {'Ma (kN.m/m)':>14} {'Mp (kN.m/m)':>14} {'Mo_net':>12}",
+        "  " + "-" * 66,
     ]
 
-    D_bawah  = max(H * 0.3, 0.5)
-    D_atas   = D_maks
-    mo_b     = momen_terhadap_z0(D_bawah)
-    mo_a     = momen_terhadap_z0(D_atas)
+    D_bawah = max(0.1, H * 0.05)
+    D_atas  = D_maks
 
+    mo_b = momen_terhadap_ujung(D_bawah)
+    mo_a = momen_terhadap_ujung(D_atas)
+
+    # Jika tanda sama, scan lebih lebar
     if mo_b * mo_a > 0:
-        D_atas = D_maks * 1.5
-        mo_a   = momen_terhadap_z0(D_atas)
+        for mul in [2, 3, 4]:
+            D_atas = D_maks * mul
+            mo_a   = momen_terhadap_ujung(D_atas)
+            if mo_b * mo_a <= 0:
+                break
 
     D_coba = D_bawah
-    for it in range(1, 10):
+    for it in range(1, 12):
         D_coba = (D_bawah + D_atas) / 2.0
-        mo     = momen_terhadap_z0(D_coba)
-        ket    = "aktif>>pasif" if mo > 0 else "pasif>>aktif"
+        mo     = momen_terhadap_ujung(D_coba)
+        # Hitung Ma dan Mp terpisah untuk log
+        dist_c = _siapkan_distribusi(lapisan_tanah, H, D_coba, muka_air, surcharge, metode_Ka, delta, gamma_w, dz)
+        z_c=dist_c["z_array"]; pa_c=dist_c["tekanan_aktif"]; pp_c=dist_c["tekanan_pasif"]
+        z_u = H + D_coba
+        Ma_c = float(np.trapezoid(pa_c*(z_u-z_c), z_c))
+        mask_c = z_c>=H-dz/2
+        Mp_c = float(np.trapezoid(pp_c[mask_c]*(z_u-z_c[mask_c]), z_c[mask_c]))
+
         langkah.append(
-            f"  {it:>8} {D_coba:>12.4f} {mo:>15.4f} {ket:>14}"
+            f"  {it:>8} {D_coba:>12.4f} {Ma_c:>14.3f} {Mp_c:>14.3f} {mo:>12.3f}"
         )
         if mo > 0:
             D_bawah = D_coba
         else:
             D_atas = D_coba
-        if abs(D_atas - D_bawah) < 1e-4:
+        if abs(D_atas - D_bawah) < 1e-3:
             break
 
     try:
-        D_min = float(optimize.brentq(momen_terhadap_z0, D_bawah, D_atas, xtol=1e-5))
-    except ValueError:
+        D_min = float(optimize.brentq(momen_terhadap_ujung, D_bawah, D_atas, xtol=1e-5))
+    except (ValueError, Exception):
         D_min = D_coba
 
     langkah += [
-        "  " + "-" * 54,
-        f"  --> D_min = {D_min:.4f} m",
+        "  " + "-" * 66,
+        f"  --> D_min = {D_min:.4f} m  (momen terhadap ujung bawah = 0)",
     ]
 
     # ── D_design ─────────────────────────────────────────────────────────────
@@ -678,9 +738,11 @@ def fixed_earth_support_cantilever(
     pp_d = dist_d["tekanan_pasif"]
     u_d  = dist_d["tekanan_air_pori"]
 
-    # Titik z0 pada D_design
+    # Titik z0 (zero pressure neto) pada D_design
     mask_pen = z_d >= H - dz / 2
     z0 = _titik_nol_tekanan(z_d[mask_pen], pn_d[mask_pen])
+    if z0 <= H:
+        z0 = H + 0.5  # fallback
 
     langkah += [
         "",
@@ -714,14 +776,13 @@ def fixed_earth_support_cantilever(
     idx_Mmax = int(np.argmax(np.abs(M_arr)))
     z_Mmax   = float(z_d[idx_Mmax])
 
-    # SF momen terhadap z0
-    mask_atas    = z_d <= z0 + dz / 2
-    Mo_aktif_z0  = abs(_momen_terhadap_titik(z_d[mask_atas & (pn_d >= 0)],
-                                              pn_d[mask_atas & (pn_d >= 0)], z0))
-    Mo_pasif_z0  = abs(_momen_terhadap_titik(z_d[mask_atas & (pn_d < 0)],
-                                              pn_d[mask_atas & (pn_d < 0)], z0))
-    SF_momen     = (Mo_pasif_z0 / Mo_aktif_z0) if Mo_aktif_z0 > 1e-6 else 999.0
-    status_sf    = _status_sf(SF_momen, SF_GULING_MIN)
+    # SF momen = Mo_pasif / Mo_aktif terhadap ujung bawah turap di D_design
+    z_ujung_d   = H + D_design
+    Mo_aktif_ujung = float(np.trapezoid(pa_d * (z_ujung_d - z_d), z_d))
+    mask_p_d    = z_d >= H - dz/2
+    Mo_pasif_ujung = float(np.trapezoid(pp_d[mask_p_d] * (z_ujung_d - z_d[mask_p_d]), z_d[mask_p_d]))
+    SF_momen    = Mo_pasif_ujung / Mo_aktif_ujung if Mo_aktif_ujung > 1e-6 else 999.0
+    status_sf   = _status_sf(SF_momen, SF_GULING_MIN)
 
     langkah += [
         "",
@@ -738,10 +799,10 @@ def fixed_earth_support_cantilever(
         _garis("-"),
         "  LANGKAH 4 — Faktor Keamanan Momen (SF_momen)",
         _garis("-"),
-        "  Rumus  : SF_momen = Mo_pasif / Mo_aktif  (terhadap z0)",
-        f"  Mo_aktif = {Mo_aktif_z0:.3f} kN.m/m",
-        f"  Mo_pasif = {Mo_pasif_z0:.3f} kN.m/m",
-        f"  Hitung : SF_momen = {Mo_pasif_z0:.3f} / {Mo_aktif_z0:.3f}",
+        "  Rumus  : SF_momen = Mo_pasif / Mo_aktif  (terhadap ujung bawah turap)",
+        f"  Mo_aktif (ujung bawah) = {Mo_aktif_ujung:.3f} kN.m/m",
+        f"  Mo_pasif (ujung bawah) = {Mo_pasif_ujung:.3f} kN.m/m",
+        f"  Hitung : SF_momen = {Mo_pasif_ujung:.3f} / {Mo_aktif_ujung:.3f}",
         f"  Hasil  : SF_momen = {SF_momen:.3f}",
         f"  SF_min = {SF_GULING_MIN:.2f}",
         f"  Status : {status_sf}",
