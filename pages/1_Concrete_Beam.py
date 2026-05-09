@@ -21,6 +21,7 @@ from utils.balok_calc import (
     evaluasi_balok,
     hitung_geser, hitung_torsi,
     buat_steps_balok, buat_steps_geser, buat_steps_torsi,
+    cek_syarat_seismik,
     gambar_penampang, fig_to_png_bytes,
 )
 from utils.balok_report import TEXT, create_word_balok, create_pdf_balok
@@ -76,6 +77,7 @@ def _init_state():
         "balok_torsi_hasil":   None,
         "balok_torsi_steps":   None,
         "balok_torsi_inputs":  None,
+        "balok_seismik_steps": None,
         "balok_word":          None,
         "balok_pdf":           None,
         "balok_fig":           None,
@@ -174,6 +176,15 @@ with col_inp:
     with cs2:
         n_kaki = st.number_input(T["nkaki"], min_value=2,    max_value=6,     value=2,     step=1,                   key="balok_inp_nkaki", help=T["nkaki_help"])
 
+    # Input Ln hanya muncul jika SRPMM atau SRPMK
+    Ln = None
+    if sistem_kode in ["SRPMM", "SRPMK"]:
+        Ln = st.number_input(
+            T["srpm_input_ln"],
+            min_value=500.0, max_value=20000.0, value=4000.0, step=100.0,
+            format="%.0f", key="balok_inp_ln", help=T["srpm_ln_help"],
+        )
+
     st.markdown(f'<div class="group-hdr">{T["torsi_add"]}</div>', unsafe_allow_html=True)
     tipe_torsi    = st.radio(    T["tipe_torsi"], options=["Equilibrium", "Compatibility"], index=0, key="balok_inp_tipe_torsi",    help=T["tipe_torsi_help"], horizontal=True)
     db_long_torsi = st.selectbox(T["db_long"],   options=[10, 13, 16, 19],                 index=1, key="balok_inp_db_long_torsi", help=T["db_long_help"])
@@ -243,6 +254,15 @@ if tombol:
             steps_torsi  = buat_steps_torsi(fc, fyt, fy, b, h, cc_sel, ds_dia, s_seng, Tu, Vu, d_tarik, Tor)
             torsi_inputs = dict(Tu=Tu, tipe_torsi=tipe_torsi, db_long_torsi=float(db_long_torsi))
 
+            # Cek syarat seismik
+            steps_seismik = cek_syarat_seismik(
+                sistem_kode, R, G, fc, fy, fyt, b, h, d_tarik,
+                R["As_tarik"], R["As_tekan"], s_seng, ds_dia,
+                lapis_tarik, R["beta1"],
+                Ln=Ln if sistem_kode in ["SRPMM", "SRPMK"] else None,
+                Vu_input=Vu,
+            )
+
             fig     = gambar_penampang(b, h, cc_sel, ds_dia, lapis_tarik, lapis_tekan, c=R["c"], torsi_data=Tor)
             png_buf = fig_to_png_bytes(fig)
 
@@ -251,6 +271,7 @@ if tombol:
                 R, steps, proj_info=proj_info, png_buf=png_buf, lang=lang,
                 G=G, steps_geser=steps_geser, geser_inputs=geser_inputs,
                 Tor=Tor, steps_torsi=steps_torsi, torsi_inputs=torsi_inputs,
+                steps_seismik=steps_seismik, sistem_kode=sistem_kode,
                 timestamp_str=ts_display,
             )
             png_buf.seek(0)
@@ -259,6 +280,7 @@ if tombol:
                 R, steps, proj_info=proj_info, png_buf=png_buf, lang=lang,
                 G=G, steps_geser=steps_geser, geser_inputs=geser_inputs,
                 Tor=Tor, steps_torsi=steps_torsi, torsi_inputs=torsi_inputs,
+                steps_seismik=steps_seismik, sistem_kode=sistem_kode,
                 timestamp_str=ts_display,
             )
 
@@ -280,6 +302,7 @@ if tombol:
             st.session_state.balok_torsi_hasil  = Tor
             st.session_state.balok_torsi_steps  = steps_torsi
             st.session_state.balok_torsi_inputs = torsi_inputs
+            st.session_state.balok_seismik_steps = steps_seismik
             st.session_state.balok_word         = w_buf.getvalue()
             st.session_state.balok_pdf          = p_buf.getvalue()
             st.session_state.balok_fig          = fig
@@ -438,6 +461,32 @@ with col_out:
                         f'font-family:monospace">{s["isi"]}</pre></div>',
                         unsafe_allow_html=True,
                     )
+
+        # Expander seismik -- hanya tampil jika bukan Biasa
+        if sistem_kode != "Biasa":
+            steps_seis = st.session_state.balok_seismik_steps or []
+            semua_ok_s = all(s["ok"] for s in steps_seis) if steps_seis else True
+            label_seis = (f"{T['srpm_expander']} [{sistem_rangka}]  "
+                          f"{'✓' if semua_ok_s else '⚠'}")
+            with st.expander(label_seis, expanded=True):
+                if steps_seis:
+                    for s in steps_seis:
+                        warna = "#2e7d32" if s["ok"] else "#c62828"
+                        tanda = "[OK]" if s["ok"] else "[!]"
+                        st.markdown(
+                            f'<div class="step-box" style="border-left-color:{warna}">'
+                            f'<div class="ref-badge">{s["ref"]}</div><br>'
+                            f'<div class="step-hdr">{s["no"]} {s["judul"]} &nbsp; {tanda}</div>'
+                            f'<pre style="margin:0;font-size:.82rem;white-space:pre-wrap;'
+                            f'font-family:monospace">{s["isi"]}</pre></div>',
+                            unsafe_allow_html=True,
+                        )
+                    if semua_ok_s:
+                        st.markdown(f'<div class="result-ok">{T["srpm_aman"]}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="result-warn">{T["srpm_tdk_aman"]}</div>', unsafe_allow_html=True)
+                else:
+                    st.info(T["srpm_info_biasa"])
 
         # Download
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
