@@ -8,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- CSS UNTUK TAMPILAN PROFESIONAL & TOMBOL SIDEBAR DI HP ---
+# --- CSS UNTUK TAMPILAN PROFESIONAL ---
 st.markdown("""
 <style>
     .hero-section {
@@ -26,38 +26,6 @@ st.markdown("""
         border-left: 5px solid #1a3c5e;
         height: 100%;
     }
-    
-    /* --- KODE KHUSUS MEMBESARKAN TOMBOL SIDEBAR ( >> ) DI HP --- */
-    [data-testid="collapsedControl"] {
-        background-color: #ff4b4b !important; /* Warna merah */
-        color: white !important;
-        border-radius: 5px;
-        padding: 5px 15px;
-        top: 15px;
-        left: 15px;
-        width: auto;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        z-index: 999999;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    
-    /* Menambahkan teks "DAFTAR PROGRAM" setelah icon panah */
-    [data-testid="collapsedControl"]::after {
-        content: " DAFTAR PROGRAM";
-        font-weight: bold;
-        font-size: 14px;
-        color: white;
-        margin-left: 5px;
-    }
-
-    /* Membesarkan icon panah agar lebih putih dan jelas */
-    [data-testid="collapsedControl"] svg {
-        fill: white !important;
-        width: 20px;
-        height: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,6 +36,22 @@ st.markdown("""
     <p>Solusi Kalkulasi Struktur Terverifikasi & Profesional untuk Praktisi Teknik Sipil</p>
 </div>
 """, unsafe_allow_html=True)
+
+# --- NAVIGASI CEPAT DI HALAMAN UTAMA (SANGAT JELAS UNTUK USER AWAM) ---
+st.markdown("### 📋 PILIH PROGRAM PERHITUNGAN DI BAWAH INI:")
+st.info("Klik salah satu tombol di bawah ini untuk langsung menuju halaman perhitungan.")
+
+# Ganti "pages/nama_file.py" dengan nama file yang sebenarnya ada di folder pages Anda
+col_nav1, col_nav2, col_nav3 = st.columns(3)
+with col_nav1:
+    # Contoh: jika file di folder pages bernama lentur_balok.py
+    st.page_link("pages/lentur_balok.py", label="Lentur Balok", icon="📏") 
+with col_nav2:
+    st.page_link("pages/kolomC.py", label="Kolom C", icon="🏢")
+with col_nav3:
+    st.page_link("pages/hcs_design.py", label="HCS Design", icon="⚙️")
+
+st.markdown("---")
 
 # --- ISI UTAMA ---
 col1, col2 = st.columns(2)
@@ -87,8 +71,6 @@ with col1:
 
 with col2:
     st.markdown("### 🏗️ Modul Perhitungan Tersedia")
-    st.info("👈 Silakan klik tombol **DAFTAR PROGRAM** berwarna merah di pojok kiri atas untuk memulai analisis.")
-    
     st.markdown("""
     Modul yang saat ini tersedia:
     * **Lentur Balok Beton:** Analisis kapasitas penampang balok persegi (SNI 2847:2019).
