@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 
 # --- KONFIGURASI HALAMAN ---
@@ -8,7 +9,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- CSS UNTUK TAMPILAN PROFESIONAL (SUDAH FIX WARNA DI HP) ---
+# --- CSS UNTUK TAMPILAN PROFESIONAL ---
 st.markdown("""
 <style>
     .hero-section {
@@ -21,7 +22,7 @@ st.markdown("""
     }
     .feature-card {
         background: #f8f9fa;
-        color: #1a1a1a; /* FIX: Memaksa teks jadi gelap agar tidak hilang di HP */
+        color: #1a1a1a;
         padding: 20px;
         border-radius: 10px;
         border-left: 5px solid #1a3c5e;
@@ -39,22 +40,37 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- NAVIGASI CEPAT DI HALAMAN UTAMA ---
-st.markdown("### 📋 PILIH PROGRAM PERHITUNGAN DI BAWAH INI:")
+# --- NAVIGASI OTOMATIS (Membaca file dari folder pages) ---
+st.markdown("### 📋 DAFTAR PROGRAM PERHITUNGAN:")
 st.info("Klik salah satu tombol di bawah ini untuk langsung menuju halaman perhitungan.")
 
-col_nav1, col_nav2, col_nav3 = st.columns(3)
-
-# =====================================================================
-# PERHATIAN: Ganti teks di dalam "pages/..." sesuai nama file asli di GitHub
-# =====================================================================
-with col_nav1:
-    # Contoh jika nama file aslinya Lentur_Balok.py atau Lentur Balok.py
-    st.page_link("pages/Lentur Balok.py", label="Lentur Balok", icon="📏") 
-with col_nav2:
-    st.page_link("pages/kolomC.py", label="Kolom C", icon="🏢")
-with col_nav3:
-    st.page_link("pages/HCS Design.py", label="HCS Design", icon="⚙️")
+pages_dir = "pages"
+if os.path.exists(pages_dir):
+    # Ambil semua file berakhiran .py di dalam folder pages dan urutkan
+    page_files = sorted([f for f in os.listdir(pages_dir) if f.endswith(".py")])
+    
+    # Buat grid 3 kolom agar rapi
+    cols = st.columns(3)
+    
+    for index, file_name in enumerate(page_files):
+        # Logika membersihkan nama file untuk label tombol
+        # Contoh: "1_Lentur_Balok.py" menjadi "Lentur Balok"
+        nama_bersih = file_name.replace(".py", "")
+        
+        # Cek apakah ada angka dan underscore di depan (misal "1_")
+        if "_" in nama_bersih and nama_bersih.split("_")[0].isdigit():
+            # Potong angka di depannya
+            nama_bersih = nama_bersih.split("_", 1)[1]
+        
+        # Ganti sisa underscore dengan spasi agar enak dibaca
+        label_tombol = nama_bersih.replace("_", " ")
+        
+        # Tempatkan tombol secara berurutan di kolom 1, 2, 3, kembali ke 1, dst
+        with cols[index % 3]:
+            # Path harus sesuai aslinya (misal "pages/1_Lentur_Balok.py")
+            st.page_link(f"pages/{file_name}", label=label_tombol, icon="⚙️")
+else:
+    st.warning("Folder navigasi belum tersedia.")
 
 st.markdown("---")
 
@@ -75,12 +91,10 @@ with col1:
     """, unsafe_allow_html=True)
 
 with col2:
-    st.markdown("### 🏗️ Modul Perhitungan Tersedia")
+    st.markdown("### 🏗️ Pembaruan Modul")
     st.markdown("""
-    Modul yang saat ini tersedia:
-    * **Lentur Balok Beton:** Analisis kapasitas penampang balok persegi (SNI 2847:2019).
-    * **Lentur Kolom Beton:** (Segera Hadir) Analisis kolom pendek simetris.
-    * **Modul Lainnya:** Sedang dalam tahap verifikasi akademisi.
+    Modul perhitungan yang tertera di atas akan terus bertambah seiring waktu. 
+    Kami berkomitmen mengembangkan fitur tambahan dan menyempurnakan program yang ada untuk mendukung produktivitas kerja Anda.
     """)
 
 # --- FOOTER ---
