@@ -1695,7 +1695,7 @@ if btn_hitung:
 # ============================================================
 
 if "R" not in st.session_state:
-    st.info("👈 Isi data input di sidebar, lalu klik **HITUNG SEKARANG** [ POJOK KIRI ATAS LOGO " >> " ]")
+    st.info("👈 Isi data input di sidebar, lalu klik **HITUNG SEKARANG** [ POJOK KIRI ATAS LOGO  >>  ]")
     st.stop()
 
 R            = st.session_state["R"]
