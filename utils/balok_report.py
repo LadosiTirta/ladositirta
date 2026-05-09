@@ -142,6 +142,14 @@ TEXT = {
         "lap_kes_lentur": "KESIMPULAN LENTUR",
         "lap_kes_geser":  "KESIMPULAN GESER",
         "lap_kes_torsi":  "KESIMPULAN TORSI",
+        # --- Seismik ---
+        "srpm_input_ln":   "Bentang Bersih Balok Ln (mm)",
+        "srpm_ln_help":    "Panjang bersih balok antar muka kolom, diperlukan untuk menghitung Ve (gaya geser seismik).",
+        "srpm_judul":      "G.  CEK PERSYARATAN SEISMIK",
+        "srpm_info_biasa": "Balok Biasa (Non-Seismik): tidak ada persyaratan seismik tambahan.",
+        "srpm_expander":   "Detail Cek Seismik",
+        "srpm_aman":       "[OK] Semua cek seismik terpenuhi",
+        "srpm_tdk_aman":   "[!] Ada cek seismik yang tidak terpenuhi -- periksa detail",
     },
     "EN": {
         "lang_select": "Select Language",
@@ -249,6 +257,14 @@ TEXT = {
         "lap_kes_lentur": "FLEXURE CONCLUSION",
         "lap_kes_geser":  "SHEAR CONCLUSION",
         "lap_kes_torsi":  "TORSION CONCLUSION",
+        # --- Seismic ---
+        "srpm_input_ln":   "Clear Span Ln (mm)",
+        "srpm_ln_help":    "Clear beam span between column faces, required to calculate Ve (seismic shear force).",
+        "srpm_judul":      "G.  SEISMIC REQUIREMENTS CHECK",
+        "srpm_info_biasa": "Ordinary (Non-Seismic): no additional seismic detailing requirements.",
+        "srpm_expander":   "Seismic Check Detail",
+        "srpm_aman":       "[OK] All seismic checks passed",
+        "srpm_tdk_aman":   "[!] Some seismic checks failed -- review details",
     }
 }
 
@@ -437,6 +453,7 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
                       lang="ID",
                       G=None, steps_geser=None, geser_inputs=None,
                       Tor=None, steps_torsi=None, torsi_inputs=None,
+                      steps_seismik=None, sistem_kode="Biasa",
                       timestamp_str=None):
     LT = TEXT[lang]
     doc = Document()
@@ -688,6 +705,21 @@ def create_word_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         size=8, italic=True, color=(0x99, 0x99, 0x99),
         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=0)
 
+    # G. CEK SEISMIK
+    if sistem_kode != "Biasa" and steps_seismik:
+        subjudul(f"{LT['srpm_judul']} [{sistem_kode}]")
+        par(f"Persyaratan tambahan SNI 2847:2019 untuk {sistem_kode}.",
+            size=10, italic=True, color=(0x55, 0x55, 0x55), space_after=8)
+        tulis_steps(steps_seismik)
+        semua_ok = all(s["ok"] for s in steps_seismik)
+        kes_s = (f"KESIMPULAN SEISMIK [{sistem_kode}] : "
+                 f"{'Semua persyaratan terpenuhi' if semua_ok else 'Ada persyaratan yang TIDAK terpenuhi -- periksa detail'}")
+        p_ks = doc.add_paragraph()
+        p_ks.paragraph_format.space_before = Pt(6); p_ks.paragraph_format.space_after = Pt(4)
+        r_ks = p_ks.add_run(kes_s); r_ks.bold = True; r_ks.font.size = Pt(10.5)
+        r_ks.font.color.rgb = RGBColor(0x1B, 0x5E, 0x20) if semua_ok else RGBColor(0xB7, 0x1C, 0x1C)
+        par(space_after=6)
+
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
@@ -700,6 +732,7 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
                      lang="ID",
                      G=None, steps_geser=None, geser_inputs=None,
                      Tor=None, steps_torsi=None, torsi_inputs=None,
+                     steps_seismik=None, sistem_kode="Biasa",
                      timestamp_str=None):
     LT  = TEXT[lang]
     pdf = LaporanBalokPDF(proj_info["nama"])
@@ -871,6 +904,18 @@ def create_pdf_balok(fc, fy, b, h, cc_sel, ds, Mu, lapis_tarik, lapis_tekan,
         pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
         pdf.set_text_color(*(OK_COLOR if ok_t else FAIL_COLOR))
         pdf.multi_cell(0, 6, sp(kes_t)); pdf.set_text_color(0, 0, 0)
+
+    # G. CEK SEISMIK
+    if sistem_kode != "Biasa" and steps_seismik:
+        if pdf.get_y() > 220: pdf.add_page(); pdf.watermark()
+        pdf.section_title(f"{LT['srpm_judul']} [{sistem_kode}]")
+        _tulis_steps_pdf(pdf, steps_seismik)
+        semua_ok = all(s["ok"] for s in steps_seismik)
+        kes_s = (f"KESIMPULAN SEISMIK [{sistem_kode}] : "
+                 f"{'Semua persyaratan terpenuhi' if semua_ok else 'Ada persyaratan yang TIDAK terpenuhi -- periksa detail'}")
+        pdf.set_x(25); pdf.set_font("Helvetica", "B", 10.5)
+        pdf.set_text_color(*(OK_COLOR if semua_ok else FAIL_COLOR))
+        pdf.multi_cell(0, 6, sp(kes_s)); pdf.set_text_color(0, 0, 0)
 
     buf = io.BytesIO(); pdf.output(buf); buf.seek(0)
     return buf
