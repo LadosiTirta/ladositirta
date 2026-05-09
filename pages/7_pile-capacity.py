@@ -13,7 +13,7 @@ from datetime import datetime
 import matplotlib
 matplotlib.use("Agg")  # backend non-interaktif untuk Streamlit
 
-from utils.input_handler import render_input_tanah, render_input_tiang, validasi_data_tanah
+from utils.input_handler import render_input_tanah, render_input_tanah_multi, render_input_tiang, validasi_data_tanah
 from calculations.bearing_capacity import hitung_kapasitas_tiang, hitung_variasi_kedalaman
 from calculations.lateral import hitung_broms, hitung_py_curve
 from utils.grapher import (
@@ -25,6 +25,8 @@ from utils.grapher_lateral import buat_grafik_broms, buat_grafik_py
 from utils.report_generator import buat_laporan_word, konversi_ke_pdf
 from utils.export_excel import buat_excel
 from utils.export_excel_rumus import buat_excel_rumus
+from calculations.settlement import hitung_settlement
+from calculations.buckling import hitung_kelangsingan, FAKTOR_K
 
 # ==============================================================
 # KONFIGURASI HALAMAN
@@ -35,6 +37,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Inisialisasi default — agar tombol Hitung bisa diklik langsung
+# tanpa harus mengisi data terlebih dahulu
+from utils.input_handler import DATA_TANAH_DEFAULT as _DEFAULT_TANAH
+if "df_tanah" not in st.session_state:
+    st.session_state["df_tanah"] = _DEFAULT_TANAH.copy()
 
 st.title("🏗️ Perhitungan Kapasitas Pondasi Tiang Dalam")
 st.caption(
@@ -60,10 +68,12 @@ tombol_hitung = st.sidebar.button(
 # ==============================================================
 # TAB UTAMA
 # ==============================================================
-tab_input, tab_hasil, tab_lateral, tab_langkah, tab_laporan = st.tabs([
+tab_input, tab_hasil, tab_lateral, tab_settlement, tab_buckling, tab_langkah, tab_laporan = st.tabs([
     "📋 Input Data Tanah",
     "📊 Hasil Tekan & Tarik",
     "↔️ Gaya Lateral",
+    "📉 Penurunan (Settlement)",
+    "🏗️ Kelangsingan & Tekuk",
     "🔍 Langkah Perhitungan",
     "📄 Cetak Laporan",
 ])
@@ -72,7 +82,13 @@ tab_input, tab_hasil, tab_lateral, tab_langkah, tab_laporan = st.tabs([
 # TAB 1: INPUT DATA TANAH
 # ----------------------------------------------------------
 with tab_input:
-    df_tanah = render_input_tanah()
+    df_tanah = render_input_tanah_multi()
+
+    # Pastikan selalu ada data default (tidak pernah None)
+    # sehingga tombol Hitung bisa diklik langsung tanpa mengisi data terlebih dahulu
+    if df_tanah is None or len(df_tanah) == 0:
+        from utils.input_handler import DATA_TANAH_DEFAULT
+        df_tanah = DATA_TANAH_DEFAULT.copy()
 
     # Simpan ke session state agar bisa diakses tab lain
     st.session_state["df_tanah"] = df_tanah
@@ -91,7 +107,7 @@ with tab_input:
 # ----------------------------------------------------------
 with tab_hasil:
     if not tombol_hitung:
-        st.info("👈 Isi data tanah di tab **Input Data Tanah**, lalu tekan **HITUNG KAPASITAS TIANG** di sidebar.")
+        st.info("👈 Tekan **HITUNG KAPASITAS TIANG** di sidebar untuk melihat hasil (data default sudah tersedia). Atau isi data tanah Anda di tab **Input Data Tanah** terlebih dahulu.")
     else:
         # Ambil data tanah dari session state
         df_tanah = st.session_state.get("df_tanah")
@@ -454,6 +470,238 @@ with tab_lateral:
 
                 st.session_state["hasil_py"] = hasil_py
 
+
+# ----------------------------------------------------------
+# TAB 4: PENURUNAN (SETTLEMENT)
+# ----------------------------------------------------------
+with tab_settlement:
+    st.subheader("Perhitungan Penurunan Tiang (Settlement)")
+    st.caption("Metode: Vesic (1977) — kompresi elastis + skin friction + end bearing | Meyerhof (1976) — dari SPT-N")
+
+    hasil_sesi_stl = st.session_state.get("hasil")
+    if hasil_sesi_stl is None:
+        st.info("Tekan **HITUNG KAPASITAS TIANG** di sidebar terlebih dahulu.")
+    else:
+        df_tanah_stl = st.session_state.get("df_tanah")
+        st.markdown("**Parameter Beban Kerja**")
+        col_stl1, col_stl2 = st.columns(2)
+        with col_stl1:
+            Q_kerja_input = st.number_input(
+                "Beban kerja per tiang (kN)",
+                min_value=1.0,
+                value=float(hasil_sesi_stl["Qijin_tekan"]),
+                step=10.0, format="%.2f",
+                help="Default = Qijin tekan. Ubah sesuai beban aktual dari analisis struktur."
+            )
+        with col_stl2:
+            st.metric("Qijin tekan tersedia", f"{hasil_sesi_stl['Qijin_tekan']:.2f} kN")
+            rasio = Q_kerja_input / hasil_sesi_stl["Qijin_tekan"] * 100
+            warna = "normal" if rasio <= 100 else "inverse"
+            st.metric("Rasio beban / kapasitas", f"{rasio:.1f}%",
+                      delta="OK ✓" if rasio <= 100 else "Melebihi kapasitas ✗",
+                      delta_color=warna)
+
+        if st.button("📉 Hitung Penurunan", type="primary", key="btn_settlement"):
+            with st.spinner("Menghitung penurunan..."):
+                try:
+                    hasil_stl = hitung_settlement(
+                        param_tiang = param_tiang,
+                        hasil_tekan = hasil_sesi_stl,
+                        df_tanah    = df_tanah_stl,
+                        Q_kerja     = Q_kerja_input,
+                    )
+                    st.session_state["hasil_settlement"] = hasil_stl
+                except Exception as ex:
+                    st.error(f"Gagal hitung settlement: {ex}")
+
+        if st.session_state.get("hasil_settlement"):
+            h = st.session_state["hasil_settlement"]
+            st.divider()
+            st.subheader("Hasil Penurunan")
+
+            # Kartu ringkasan
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Penurunan Vesic", f"{h['s_total_vesic']:.2f} mm",
+                      delta=h["kontrol_vesic"], delta_color="normal" if "OK" in h["kontrol_vesic"] else "inverse")
+            c2.metric("Penurunan Meyerhof", f"{h['s_meyerhof']:.2f} mm",
+                      delta=h["kontrol_spt"], delta_color="normal" if "OK" in h["kontrol_spt"] else "inverse")
+            c3.metric("Batas izin (SNI 8460)", f"{h['s_izin_umum']:.0f} mm")
+            c4.metric("Beban kerja", f"{h['Q_kerja']:.2f} kN")
+
+            # Breakdown komponen
+            st.divider()
+            st.markdown("**Komponen Penurunan (Metode Vesic)**")
+            df_komponen = pd.DataFrame({
+                "Komponen": [
+                    "se — Kompresi elastis tiang",
+                    "ss — Transfer beban selimut (skin friction)",
+                    "sp — Penurunan end bearing",
+                    "s_total — Total penurunan"
+                ],
+                "Nilai (mm)": [
+                    f"{h['se_mm']:.3f}",
+                    f"{h['ss_mm']:.3f}",
+                    f"{h['sp_mm']:.3f}",
+                    f"{h['s_total_vesic']:.3f}",
+                ],
+                "Persentase (%)": [
+                    f"{h['se_mm']/max(h['s_total_vesic'],0.001)*100:.1f}%",
+                    f"{h['ss_mm']/max(h['s_total_vesic'],0.001)*100:.1f}%",
+                    f"{h['sp_mm']/max(h['s_total_vesic'],0.001)*100:.1f}%",
+                    "100%",
+                ]
+            })
+            st.dataframe(df_komponen, use_container_width=True, hide_index=True)
+
+            # Parameter tanah yang digunakan
+            st.markdown("**Parameter tanah yang digunakan**")
+            col_p1, col_p2, col_p3 = st.columns(3)
+            col_p1.metric("Es rata-rata", f"{h['Es_avg']:,.0f} kPa")
+            col_p2.metric("Es tanah ujung", f"{h['Es_ujung']:,.0f} kPa")
+            col_p3.metric("SPT-N rata-rata", f"{h['N_avg']:.1f}")
+
+            # Langkah perhitungan
+            with st.expander("📌 Langkah Perhitungan Settlement", expanded=False):
+                st.code("\n".join(h["langkah"]), language=None)
+
+
+# ----------------------------------------------------------
+# TAB 5: KELANGSINGAN & TEKUK
+# ----------------------------------------------------------
+with tab_buckling:
+    st.subheader("Pemeriksaan Kelangsingan & Tekuk Tiang")
+    st.caption(
+        "Acuan: SNI 2847:2019 Pasal 6.2.5 · Davisson & Robinson (1965) · "
+        "Tomlinson (2008) Tabel 3.2 · Euler (1744)"
+    )
+
+    hasil_sesi_bkl = st.session_state.get("hasil")
+    if hasil_sesi_bkl is None:
+        st.info("Tekan **HITUNG KAPASITAS TIANG** di sidebar terlebih dahulu.")
+    else:
+        df_tanah_bkl = st.session_state.get("df_tanah")
+        col_bkl1, col_bkl2, col_bkl3 = st.columns(3)
+        with col_bkl1:
+            kondisi_kepala_bkl = st.selectbox(
+                "Kondisi kepala – ujung tiang",
+                options=list(FAKTOR_K.keys()),
+                index=1,
+                help="Kepala jepit = tiang terhubung kaku ke pile cap. "
+                     "Ujung bebas = ujung bawah tiang tidak terkekang."
+            )
+        with col_bkl2:
+            Q_bkl = st.number_input(
+                "Q aksial kerja (kN)",
+                value=float(hasil_sesi_bkl["Qijin_tekan"]),
+                min_value=1.0, step=10.0, format="%.2f",
+                help="Beban aksial tekan kerja per tiang."
+            )
+        with col_bkl3:
+            hasil_br_bkl = st.session_state.get("hasil_broms")
+            hasil_py_bkl = st.session_state.get("hasil_py")
+            M_lat_default = 0.0
+            if hasil_br_bkl:
+                M_lat_default = float(hasil_br_bkl.get("Mmax", 0.0))
+            elif hasil_py_bkl:
+                M_lat_default = float(hasil_py_bkl.get("Mmax", 0.0))
+            M_bkl = st.number_input(
+                "Momen lateral Mmax (kN·m)",
+                value=M_lat_default, min_value=0.0, step=5.0, format="%.2f",
+                help="Momen dari gaya lateral. Otomatis diisi dari tab Gaya Lateral jika sudah dihitung."
+            )
+
+        if st.button("🏗️ Periksa Kelangsingan", type="primary", key="btn_buckling"):
+            with st.spinner("Memeriksa kelangsingan..."):
+                try:
+                    hasil_bkl = hitung_kelangsingan(
+                        param_tiang         = param_tiang,
+                        hasil_tekan         = hasil_sesi_bkl,
+                        df_tanah            = df_tanah_bkl,
+                        kondisi_kepala_atas = kondisi_kepala_bkl,
+                        Q_aksial            = Q_bkl,
+                        M_lateral           = M_bkl,
+                    )
+                    st.session_state["hasil_buckling"] = hasil_bkl
+                except Exception as ex:
+                    st.error(f"Gagal: {ex}")
+
+        if st.session_state.get("hasil_buckling"):
+            h = st.session_state["hasil_buckling"]
+            st.divider()
+
+            # Status keseluruhan
+            if h["semua_ok"]:
+                st.success(h["status_akhir"])
+            else:
+                st.warning(h["status_akhir"])
+
+            # Kartu 5 pemeriksaan
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("L/D ratio", f"{h['LD_ratio']:.1f}",
+                      delta=f"batas {h['batas_LD']}",
+                      delta_color="normal" if "TIDAK" not in h["kontrol_LD"] else "inverse")
+            c2.metric("Le efektif", f"{h['Le_final']:.3f} m",
+                      delta=f"k = {h['k_faktor']}", delta_color="off")
+            c3.metric("SF tekuk Euler", f"{h['SF_euler']:.2f}",
+                      delta="OK ✓" if h["SF_euler"]>=3.0 else "TIDAK OK ✗",
+                      delta_color="normal" if h["SF_euler"]>=3.0 else "inverse")
+            c4.metric("kLu/r", f"{h['kLu_r']:.1f}",
+                      delta=h["klu_status"],
+                      delta_color="normal" if h["klu_status"]=="diabaikan" else "inverse")
+            c5.metric("Rasio P-M", f"{h['rasio_PM']:.3f}",
+                      delta="OK ✓" if h["rasio_PM"]<=1.0 else "TIDAK OK ✗",
+                      delta_color="normal" if h["rasio_PM"]<=1.0 else "inverse")
+
+            # Tabel ringkasan
+            st.divider()
+            st.markdown("**Tabel Ringkasan Pemeriksaan**")
+            df_bkl_tbl = pd.DataFrame([
+                {"No.": 1, "Pemeriksaan": "Rasio kelangsingan geometri (L/D)",
+                 "Nilai": f"{h['LD_ratio']:.2f}", "Batas": str(h['batas_LD']),
+                 "Acuan": "Tomlinson (2008) Tabel 3.2", "Status": h["kontrol_LD"].split("—")[0].strip()},
+                {"No.": 2, "Pemeriksaan": "Panjang tekuk efektif (Le)",
+                 "Nilai": f"{h['Le_final']:.3f} m", "Batas": "—",
+                 "Acuan": "Davisson & Robinson (1965)", "Status": "─"},
+                {"No.": 3, "Pemeriksaan": f"Beban tekuk Euler (Pcr = {h['Pcr']:,.0f} kN)",
+                 "Nilai": f"SF = {h['SF_euler']:.2f}", "Batas": "≥ 3.0",
+                 "Acuan": "Euler (1744)", "Status": "OK ✓" if h["SF_euler"]>=3.0 else "TIDAK OK ✗"},
+                {"No.": 4, "Pemeriksaan": "Kolom langsing SNI 2847:2019 Ps. 6.2.5",
+                 "Nilai": f"kLu/r = {h['kLu_r']:.1f}", "Batas": "< 22 diabaikan",
+                 "Acuan": "SNI 2847:2019 Pasal 6.2.5(a)", "Status": h["kontrol_kolom"].split("(")[0].strip()},
+                {"No.": 5, "Pemeriksaan": "Interaksi P-M (beam-column)",
+                 "Nilai": f"Rasio = {h['rasio_PM']:.4f}", "Batas": "≤ 1.0",
+                 "Acuan": "SNI 2847:2019 Pasal 22.4.3.1", "Status": h["kontrol_PM"].split("(")[0].strip()},
+            ])
+            st.dataframe(df_bkl_tbl, use_container_width=True, hide_index=True)
+
+            # Detail parameter
+            with st.expander("Detail parameter perhitungan"):
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    st.markdown(f"""
+                    | Parameter | Nilai |
+                    |-----------|-------|
+                    | EI tiang | {h['EI_eff']:,.0f} kN·m² |
+                    | T atau R (Davisson) | {h['T_atau_R']:.3f} m |
+                    | Le₀ (kepala bebas) | {h['Le_dom']:.3f} m |
+                    | k faktor | {h['k_faktor']} |
+                    | Le final | {h['Le_final']:.3f} m |
+                    """)
+                with col_d2:
+                    st.markdown(f"""
+                    | Parameter | Nilai |
+                    |-----------|-------|
+                    | r (jari-jari girasi) | {h['r']:.4f} m |
+                    | φPn kapasitas aksial | {h['fPn']:,.2f} kN |
+                    | φMn kapasitas momen | {h['fMn']:.2f} kN·m |
+                    | M total | {h['M_total']:.2f} kN·m |
+                    | Pcr Euler | {h['Pcr']:,.2f} kN |
+                    """)
+
+            # Langkah detail
+            with st.expander("📌 Langkah Perhitungan Kelangsingan (detail runtut)", expanded=False):
+                st.code("\n".join(h["langkah"]), language=None)
+
 # ----------------------------------------------------------
 # TAB 5: CETAK LAPORAN (Word & PDF)
 # ----------------------------------------------------------
@@ -510,6 +758,7 @@ with tab_laporan:
                             hasil_tekan     = hasil_sesi_lap,
                             hasil_lateral   = hasil_lateral_lap,
                             metode_lateral  = metode_lat_lap,
+                            hasil_buckling  = st.session_state.get("hasil_buckling"),
                             nama_proyek     = nama_proyek,
                             nama_konsultan  = nama_konsultan,
                             nomor_laporan   = nomor_laporan,
@@ -546,6 +795,7 @@ with tab_laporan:
                             hasil_tekan     = hasil_sesi_lap,
                             hasil_lateral   = hasil_lateral_lap,
                             metode_lateral  = metode_lat_lap,
+                            hasil_buckling  = st.session_state.get("hasil_buckling"),
                             nama_proyek     = nama_proyek,
                             nama_konsultan  = nama_konsultan,
                             nomor_laporan   = nomor_laporan,
@@ -644,30 +894,51 @@ with tab_laporan:
                 use_container_width=False,
             )
 
-        # ---- TOMBOL EXCEL DENGAN RUMUS (INTERNAL) ----
+        # ---- TOMBOL EXCEL DENGAN RUMUS (ADMIN ONLY) ----
         st.divider()
-        st.markdown("**Format Excel (.xlsx) — Dengan rumus (untuk keperluan internal)**")
-        st.caption(
-            "🔒 Sheet terkunci dengan password. Sel kuning = input yang bisa diubah. "
-            "Sel biru = hasil rumus otomatis. Password default: **admin123** "
-            "(bisa diganti di file `utils/export_excel_rumus.py`)."
-        )
-        if st.button("📐 Buat Excel + Rumus (Internal)", key="btn_excel_rumus"):
-            df_tanah_xr = st.session_state.get("df_tanah")
-            with st.spinner("Menyusun Excel dengan rumus..."):
-                try:
-                    buf_xr = buat_excel_rumus(
-                        param_tiang    = param_tiang,
-                        df_tanah       = df_tanah_xr,
-                        nama_proyek    = nama_proyek,
-                        nama_konsultan = nama_konsultan,
-                    )
-                    st.session_state["buf_excel_rumus"] = buf_xr
-                    st.success("Excel dengan rumus berhasil dibuat! Password sheet: admin123")
-                except Exception as ex:
-                    st.error(f"Gagal membuat Excel rumus: {ex}")
+        col_xr_title, col_xr_help = st.columns([8, 1])
+        with col_xr_title:
+            st.markdown("**Format Excel (.xlsx) — Dengan rumus (khusus pengembang / admin Ladosi)**")
+        with col_xr_help:
+            st.button("❓", key="btn_help_rumus",
+                      help="File ini dilindungi password dan hanya untuk pengembang. "
+                           "Hubungi admin Ladosi untuk akses.")
 
-        if st.session_state.get("buf_excel_rumus"):
+        st.caption(
+            "🔒 File ini dilindungi. Untuk mengakses, hubungi **admin / pengembang Ladosi**."
+        )
+
+        pw_input = st.text_input(
+            "pw_rumus",
+            type="password",
+            key="pw_excel_rumus",
+            label_visibility="collapsed",
+            placeholder="Masukkan kode akses dari admin Ladosi...",
+        )
+
+        if st.button("📐 Buat & Download Excel + Rumus", key="btn_excel_rumus"):
+            # pw tersimpan di kode — tidak tampil di UI
+            _PW = "L@d0s1_4dm1n_2025"
+            if not pw_input:
+                st.warning("Masukkan kode akses terlebih dahulu. Hubungi admin Ladosi untuk mendapatkan kode.")
+            elif pw_input != _PW:
+                st.error("Kode akses tidak valid. Hubungi admin / pengembang Ladosi.")
+            else:
+                df_tanah_xr = st.session_state.get("df_tanah")
+                with st.spinner("Menyusun file..."):
+                    try:
+                        buf_xr = buat_excel_rumus(
+                            param_tiang    = param_tiang,
+                            df_tanah       = df_tanah_xr,
+                            nama_proyek    = nama_proyek,
+                            nama_konsultan = nama_konsultan,
+                        )
+                        st.session_state["buf_excel_rumus"] = buf_xr
+                        st.success("File siap didownload.")
+                    except Exception as ex:
+                        st.error(f"Gagal: {ex}")
+
+        if st.session_state.get("buf_excel_rumus") and pw_input == "L@d0s1_4dm1n_2025":
             nama_xr = (
                 f"template_rumus_{nama_proyek.replace(' ','_')}_"
                 f"{datetime.now().strftime('%Y%m%d')}.xlsx"
@@ -679,3 +950,10 @@ with tab_laporan:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=False,
             )
+
+        # ═══════════════════════════════════════════
+        # CATATAN DEVELOPER — tidak tampil di layar
+        # Kode akses Excel rumus : L@d0s1_4dm1n_2025
+        # Password sheet Excel   : admin123
+        #   → ganti di utils/export_excel_rumus.py baris: PASSWORD = "..."
+        # ═══════════════════════════════════════════
