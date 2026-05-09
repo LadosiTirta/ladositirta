@@ -280,6 +280,7 @@ def buat_laporan_word(
     hasil_tekan: dict,
     hasil_lateral: dict | None = None,
     metode_lateral: str = "Broms",
+    hasil_buckling: dict | None = None,
     nama_proyek: str = "Proyek Pondasi",
     nama_konsultan: str = "",
     nomor_laporan: str = "LAP-001",
@@ -552,13 +553,75 @@ def buat_laporan_word(
         doc.add_paragraph()
 
     # ===========================================================
+    # BAGIAN 7: KELANGSINGAN & TEKUK (jika tersedia)
+    # ===========================================================
+    if hasil_buckling:
+        _tambah_heading(doc, "7. Pemeriksaan Kelangsingan & Tekuk Tiang", level=1)
+        _tambah_garis_pemisah(doc)
+
+        _tambah_paragraf(doc,
+            "Acuan: SNI 2847:2019 Pasal 6.2.5 | Davisson & Robinson (1965) | "
+            "Tomlinson (2008) Tabel 3.2 | Euler (1744)", ukuran=Pt(10))
+        doc.add_paragraph()
+
+        # Tabel ringkasan 5 pemeriksaan
+        tbl_bkl = _buat_tabel_header(doc,
+            ["No.", "Pemeriksaan", "Nilai Hitung", "Batas/Syarat", "Acuan", "Status"],
+            lebar_kolom=[0.8, 5.0, 2.5, 2.5, 3.5, 2.5]
+        )
+        bkl_rows = [
+            ("1", "Rasio kelangsingan geometri (L/D)",
+             f"L/D = {hasil_buckling['LD_ratio']:.2f}",
+             f"≤ {hasil_buckling['batas_LD']}",
+             "Tomlinson (2008) Tabel 3.2",
+             hasil_buckling["kontrol_LD"].split("—")[0].strip()),
+            ("2", "Panjang tekuk efektif (Le)",
+             f"Le = {hasil_buckling['Le_final']:.3f} m",
+             "—",
+             "Davisson & Robinson (1965)",
+             "─"),
+            ("3", f"Beban tekuk Euler (Pcr = {hasil_buckling['Pcr']:,.0f} kN)",
+             f"SF = {hasil_buckling['SF_euler']:.2f}",
+             "≥ 3.0",
+             "Euler (1744)",
+             "OK ✓" if hasil_buckling["SF_euler"] >= 3.0 else "TIDAK OK ✗"),
+            ("4", "Kolom langsing — kLu/r",
+             f"kLu/r = {hasil_buckling['kLu_r']:.1f}",
+             "< 22 diabaikan",
+             "SNI 2847:2019 Ps. 6.2.5(a)",
+             hasil_buckling["kontrol_kolom"].split("(")[0].strip()),
+            ("5", "Interaksi aksial-momen (P-M)",
+             f"Rasio = {hasil_buckling['rasio_PM']:.4f}",
+             "≤ 1.0",
+             "SNI 2847:2019 Ps. 22.4.3.1",
+             hasil_buckling["kontrol_PM"].split("(")[0].strip()),
+        ]
+        for i, baris in enumerate(bkl_rows):
+            _tambah_baris_tabel(tbl_bkl, list(baris),
+                                rata_kanan=[2], nomor_baris=i)
+
+        doc.add_paragraph()
+
+        # Status keseluruhan
+        p_status = _tambah_paragraf(doc,
+            f"Status keseluruhan: {hasil_buckling['status_akhir']}",
+            bold=True)
+
+        doc.add_paragraph()
+
+        # Langkah perhitungan detail runtut
+        _tambah_heading(doc, "7.1 Langkah Perhitungan Kelangsingan (Detail)", level=2)
+        _tambah_kode(doc, hasil_buckling["langkah"])
+        doc.add_paragraph()
+
+        # ===========================================================
     # BAGIAN 8: GRAFIK
     # ===========================================================
-    _tambah_heading(doc, "7. Grafik dan Visualisasi", level=1)
+    _tambah_heading(doc, "8. Grafik dan Visualisasi", level=1)
     _tambah_garis_pemisah(doc)
 
     # Grafik profil tanah
-    _tambah_heading(doc, "7.1 Profil Tanah", level=2)
+    _tambah_heading(doc, "8.1 Profil Tanah", level=2)
     fig_profil = buat_grafik_profil(
         hasil_tekan["semua_lapisan"],
         param_tiang["kedalaman"],
@@ -568,7 +631,7 @@ def buat_laporan_word(
     _embed_grafik(doc, fig_profil, lebar_inch=5.0)
 
     # Grafik distribusi skin friction
-    _tambah_heading(doc, "7.2 Distribusi Daya Dukung Selimut", level=2)
+    _tambah_heading(doc, "8.2 Distribusi Daya Dukung Selimut", level=2)
     fig_dist = buat_grafik_distribusi_skin(
         hasil_tekan["detail_lapisan"],
         hasil_tekan["Qpoint"],
@@ -577,7 +640,7 @@ def buat_laporan_word(
     _embed_grafik(doc, fig_dist, lebar_inch=6.0)
 
     # Grafik variasi kedalaman
-    _tambah_heading(doc, "7.3 Kapasitas Tiang vs Variasi Kedalaman", level=2)
+    _tambah_heading(doc, "8.3 Kapasitas Tiang vs Variasi Kedalaman", level=2)
     hasil_var = hitung_variasi_kedalaman(
         df_tanah, param_tiang,
         z_min=max(param_tiang["kedalaman"] * 0.3, 3.0),
@@ -589,7 +652,7 @@ def buat_laporan_word(
 
     # Grafik lateral
     if hasil_lateral:
-        _tambah_heading(doc, "7.4 Gaya Lateral", level=2)
+        _tambah_heading(doc, "8.4 Gaya Lateral", level=2)
         if "Broms" in metode_lateral:
             hasil_lateral["H_input"] = hasil_lateral.get("H_input", 0)
             hasil_lateral["L"] = param_tiang["kedalaman"]
@@ -605,7 +668,7 @@ def buat_laporan_word(
     # BAGIAN 9: DISCLAIMER & REFERENSI
     # ===========================================================
     doc.add_page_break()
-    _tambah_heading(doc, "8. Referensi dan Catatan", level=1)
+    _tambah_heading(doc, "9. Referensi dan Catatan", level=1)
     _tambah_garis_pemisah(doc)
 
     refs = [
