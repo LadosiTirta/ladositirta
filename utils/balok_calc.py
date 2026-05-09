@@ -795,6 +795,206 @@ def buat_steps_torsi(fc, fyt, fy_long, b, h, cc_sel, ds, s_seng,
 
 
 # ============================================================
+# FUNGSI CEK SYARAT SEISMIK (SRPMB / SRPMM / SRPMK)
+# Referensi: SNI 2847:2019 Pasal 18.4 (SRPMM) & 18.6 (SRPMK)
+# ============================================================
+def hitung_mpr(As, fy, fc, b, d):
+    """
+    Momen probable Mpr dengan 1.25fy.
+    SNI 2847:2019 Pasal 18.6.5 / ACI 318-14 R18.6.5
+    As  : luas tulangan (mm2)
+    d   : tinggi efektif (mm)
+    Returns Mpr dalam kN.m
+    """
+    fy_pr = 1.25 * fy
+    a_pr  = As * fy_pr / (0.85 * fc * b)
+    Mpr   = As * fy_pr * (d - a_pr / 2.0) / 1_000_000.0   # kN.m
+    return Mpr, a_pr
+
+
+def cek_syarat_seismik(mode, R, G, fc, fy, fyt, b, h, d,
+                        As_tarik, As_tekan, s_seng, ds,
+                        lapis_tarik, beta1,
+                        Ln=None, Vu_input=None):
+    """
+    Cek persyaratan tambahan sesuai mode seismik.
+    Returns list of dict {no, judul, ref, isi, ok}
+    mode: "Biasa", "SRPMB", "SRPMM", "SRPMK"
+    Ln  : bentang bersih balok (mm) -- untuk Ve SRPMM/K
+    """
+    if mode == "Biasa":
+        return []
+
+    steps = []
+
+    # ---- SRPMB: Informatif saja ----
+    if mode == "SRPMB":
+        steps.append(dict(
+            no="g1.", ref="SNI 2847:2019 Pasal 18.3",
+            judul="SRPMB — Informasi Persyaratan",
+            isi=(
+                f"Sistem Rangka Pemikul Momen Biasa (SRPMB)\n"
+                f"tidak memiliki persyaratan detailing khusus\n"
+                f"di luar persyaratan umum SNI 2847:2019.\n\n"
+                f"Hasil evaluasi lentur, geser, dan torsi di atas\n"
+                f"sudah mencakup seluruh persyaratan yang berlaku.\n\n"
+                f"Rho terpasang = {R['rho']*100:.4f}%\n"
+                f"  Rho-min    = {R['rho_min']*100:.4f}%   --> "
+                f"{'[OK]' if R['ok_rho_min'] else '[TIDAK OK]'}\n"
+                f"  Rho-max    = {R['rho_max']*100:.4f}%   --> "
+                f"{'[OK]' if R['ok_rho_max'] else '[TIDAK OK]'}"
+            ),
+            ok=(R["ok_rho_min"] and R["ok_rho_max"]),
+        ))
+        return steps
+
+    # ---- SRPMM & SRPMK: cek bersama ----
+    # Ambil diameter terkecil dari lapis tarik
+    db_list = [L["db"] for L in lapis_tarik if L["n"] > 0]
+    db_min  = min(db_list) if db_list else ds
+
+    # --- g1: As' >= 0.5 As_tarik ---
+    ok_as_tekan = (As_tekan >= 0.5 * As_tarik)
+    ref_as = "SNI 2847:2019 Pasal 18.4.2.1" if mode == "SRPMM" else "SNI 2847:2019 Pasal 18.6.3.2"
+    steps.append(dict(
+        no="g1.", ref=ref_as,
+        judul="Tulangan tekan minimum (As' >= 0.5 As_tarik)",
+        isi=(
+            f"As_tarik   = {As_tarik:.1f} mm2\n"
+            f"0.5 x As_tarik = {0.5*As_tarik:.1f} mm2\n"
+            f"As_tekan   = {As_tekan:.1f} mm2\n\n"
+            f"Kontrol As_tekan >= 0.5 x As_tarik  -->  "
+            f"{'[OK]' if ok_as_tekan else '[TIDAK OK] -- Tambah tulangan tekan'}"
+        ),
+        ok=ok_as_tekan,
+    ))
+
+    # --- g2: Panjang zona lo (informatif) ---
+    lo_min = 2.0 * h   # mm
+    if Ln is not None:
+        ket_lo = (
+            f"lo_min = 2 x h = 2 x {h:.0f} = {lo_min:.0f} mm\n"
+            f"Ln (bentang bersih) = {Ln:.0f} mm\n"
+            f"Zona lo dipasang dari muka kolom sejauh >= {lo_min:.0f} mm\n"
+            f"  -->  [PERLU DIPASANG] Sengkang rapat di zona lo = {lo_min:.0f} mm"
+        )
+    else:
+        ket_lo = (
+            f"lo_min = 2 x h = 2 x {h:.0f} = {lo_min:.0f} mm\n"
+            f"Bentang bersih Ln tidak diinput -- zona lo = {lo_min:.0f} mm dari muka kolom\n"
+            f"  -->  [INFORMATIF] Pasang sengkang rapat di zona lo"
+        )
+    steps.append(dict(
+        no="g2.", ref="SNI 2847:2019 Pasal 18.4.2.2" if mode=="SRPMM" else "SNI 2847:2019 Pasal 18.6.4.2",
+        judul="Panjang zona sendi plastis (lo)",
+        isi=ket_lo,
+        ok=True,
+    ))
+
+    # --- g3: Spasi sengkang zona lo ---
+    if mode == "SRPMM":
+        s_max_lo  = min(d / 4.0, 8.0 * db_min, 24.0 * ds, 300.0)
+        ref_spasi = "SNI 2847:2019 Pasal 18.4.2.3"
+        rumus_s   = (
+            f"s_max_lo = min(d/4, 8db_min, 24ds, 300 mm)\n"
+            f"         = min({d/4:.1f}, {8*db_min:.1f}, {24*ds:.1f}, 300)\n"
+            f"         = {s_max_lo:.1f} mm"
+        )
+    else:  # SRPMK
+        s_max_lo  = min(d / 4.0, 6.0 * db_min, 150.0)
+        ref_spasi = "SNI 2847:2019 Pasal 18.6.4.4"
+        rumus_s   = (
+            f"s_max_lo = min(d/4, 6db_min, 150 mm)\n"
+            f"         = min({d/4:.1f}, {6*db_min:.1f}, 150)\n"
+            f"         = {s_max_lo:.1f} mm"
+        )
+    ok_spasi_lo = (s_seng <= s_max_lo)
+    steps.append(dict(
+        no="g3.", ref=ref_spasi,
+        judul=f"Spasi sengkang zona lo ({mode})",
+        isi=(
+            f"{rumus_s}\n\n"
+            f"s terpasang = {s_seng:.0f} mm\n"
+            f"Kontrol s <= s_max_lo  -->  "
+            f"{'[OK]' if ok_spasi_lo else f'[TIDAK OK] -- Rapatkan ke <= {s_max_lo:.0f} mm'}"
+        ),
+        ok=ok_spasi_lo,
+    ))
+
+    # --- g4: Mpr & Ve ---
+    Mpr_tarik, a_tarik = hitung_mpr(As_tarik, fy, fc, b, d)
+    Mpr_tekan, a_tekan = hitung_mpr(As_tekan, fy, fc, b, d) if As_tekan > 0 else (0.0, 0.0)
+    ref_ve = "SNI 2847:2019 Pasal 18.4.2.3" if mode == "SRPMM" else "SNI 2847:2019 Pasal 18.6.5.1"
+
+    if Ln is not None and Ln > 0:
+        Ve     = (Mpr_tarik + Mpr_tekan) / (Ln / 1000.0)   # Ln mm -> m
+        ok_ve  = (Vu_input is not None and Ve > (Vu_input if Vu_input else 0))
+        ket_ve = (
+            f"Mpr_tarik = As_tarik x 1.25fy x (d - a/2)\n"
+            f"          = {As_tarik:.1f} x {1.25*fy:.0f} x ({d:.2f} - {a_tarik/2:.2f}) / 1e6\n"
+            f"          = {Mpr_tarik:.3f} kN.m\n\n"
+            f"Mpr_tekan = {Mpr_tekan:.3f} kN.m  (pakai As_tekan = {As_tekan:.1f} mm2)\n\n"
+            f"Ve = (Mpr_tarik + Mpr_tekan) / Ln\n"
+            f"   = ({Mpr_tarik:.3f} + {Mpr_tekan:.3f}) / {Ln/1000:.3f}\n"
+            f"   = {Ve:.2f} kN\n\n"
+            f"Vu input   = {Vu_input:.2f} kN\n"
+            f"Ve desain  = {Ve:.2f} kN\n"
+            f"  -->  {'[PERHATIAN] Ve > Vu input -- gunakan Ve sebagai gaya geser desain!' if Ve > (Vu_input or 0) else '[OK] Vu input sudah mencakup Ve'}"
+        )
+        ok_g4 = True   # informatif
+    else:
+        Ve     = None
+        ket_ve = (
+            f"Mpr_tarik = {Mpr_tarik:.3f} kN.m  (As_tarik = {As_tarik:.1f} mm2, 1.25fy = {1.25*fy:.0f} MPa)\n"
+            f"Mpr_tekan = {Mpr_tekan:.3f} kN.m  (As_tekan = {As_tekan:.1f} mm2)\n\n"
+            f"Ve = (Mpr_tarik + Mpr_tekan) / Ln\n"
+            f"  -->  [INPUT Ln diperlukan untuk menghitung Ve]\n"
+            f"       Masukkan bentang bersih balok Ln untuk mendapatkan Ve desain."
+        )
+        ok_g4 = True
+
+    steps.append(dict(
+        no="g4.", ref=ref_ve,
+        judul="Momen probable (Mpr) & gaya geser desain seismik (Ve)",
+        isi=ket_ve,
+        ok=ok_g4,
+    ))
+
+    # ---- Tambahan khusus SRPMK ----
+    if mode == "SRPMK":
+        # g5: rho <= 0.025
+        rho = As_tarik / (b * d)
+        ok_rho_max_srpmk = (rho <= 0.025)
+        steps.append(dict(
+            no="g5.", ref="SNI 2847:2019 Pasal 18.6.3.1",
+            judul="Rasio tulangan tarik maksimum SRPMK (rho <= 0.025)",
+            isi=(
+                f"rho = As_tarik / (b x d)\n"
+                f"    = {As_tarik:.1f} / ({b:.0f} x {d:.2f})\n"
+                f"    = {rho*100:.4f}%\n\n"
+                f"rho_max_SRPMK = 2.5%\n"
+                f"Kontrol rho <= 2.5%  -->  "
+                f"{'[OK]' if ok_rho_max_srpmk else '[TIDAK OK] -- Kurangi tulangan tarik atau perbesar dimensi'}"
+            ),
+            ok=ok_rho_max_srpmk,
+        ))
+
+        # g6: Kait gempa 135° (informatif)
+        steps.append(dict(
+            no="g6.", ref="SNI 2847:2019 Pasal 18.6.4.1",
+            judul="Kait gempa sengkang 135 derajat (informatif)",
+            isi=(
+                f"SRPMK mensyaratkan kait gempa 135 derajat pada sengkang.\n"
+                f"Ekstensi ujung kait >= 6 x ds = 6 x {ds:.0f} = {6*ds:.0f} mm\n"
+                f"  -->  [INFORMATIF] Pastikan detail gambar memenuhi syarat kait 135 derajat"
+            ),
+            ok=True,
+        ))
+
+    return steps
+
+
+# ============================================================
 # VISUALISASI PENAMPANG (matplotlib)
 # ============================================================
 def gambar_penampang(b, h, cc_sel, ds, lapis_tarik, lapis_tekan,
