@@ -106,4 +106,4 @@ Pillow>=10.0.0
 
 ---
 
-*Dibuat oleh: Structural Civil Engineer, Pabrik Beton Pracetak, Jabodetabek.*
+*Dibuat oleh: Team of Structural Civil Engineer*
