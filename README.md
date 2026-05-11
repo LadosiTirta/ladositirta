@@ -1,7 +1,6 @@
 # Hitung Lentur Balok — Program Perhitungan Struktur
 
 Program perhitungan struktur berbasis **Streamlit** untuk kebutuhan engineer
-beton pracetak di Jabodetabek & Jawa Barat.
 
 Standar: **SNI** (mengacu ACI, AISC, ASCE) dan referensi geoteknik internasional
 (NAVFAC, USS Sheet Pile Manual).
