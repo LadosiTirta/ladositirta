@@ -85,7 +85,7 @@ with col1:
             <li><b>Akurasi Berdasarkan Standar:</b> Perhitungan disusun mengikuti urutan pasal SNI dan literatur yang berlaku.</li>
             <li><b>Laporan Siap Pakai:</b> Ekspor hasil ke format Word atau PDF dengan tata letak profesional.</li>
             <li><b>Transparansi Perhitungan:</b> Kami tidak memberikan angka instan, melainkan menjabarkan langkah demi langkah analisis.</li>
-            <li><b>Efisien & Cepat:</b> Membantu konsultan menghemat waktu dalam penyusunan laporan teknis.</li>
+            <li><b>Efisien & Cepat:</b> Membantu engineer menghemat waktu dalam penyusunan laporan teknis.</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
